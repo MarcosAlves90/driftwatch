@@ -1,0 +1,6 @@
+{
+  "targets": [
+    {"name": "development", "connection_string": "env:DRIFTWATCH_DEV"},
+    {"name": "production", "connection_string": "env:DRIFTWATCH_PROD"}
+  ]
+}
