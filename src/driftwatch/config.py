@@ -26,3 +26,19 @@ def load_targets(path: str | Path) -> list[DatabaseTarget]:
             raise ValueError("each target needs name and connection_string")
         result.append(DatabaseTarget(item["name"], _resolve(item["connection_string"])))
     return result
+
+
+def _odbc_value(value: str) -> str:
+    """Quote an ODBC value so semicolons and closing braces stay inside the value."""
+    return "{" + value.replace("}", "}}") + "}"
+
+
+def apply_cli_credentials(
+    targets: list[DatabaseTarget], username: str | None, password: str | None
+) -> list[DatabaseTarget]:
+    if username is None and password is None:
+        return targets
+    if not username or password is None:
+        raise ValueError("--username and a password source must be provided together")
+    suffix = f";UID={_odbc_value(username)};PWD={_odbc_value(password)}"
+    return [DatabaseTarget(target.name, target.connection_string + suffix) for target in targets]

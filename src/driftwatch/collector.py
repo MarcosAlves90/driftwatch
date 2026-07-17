@@ -1,4 +1,5 @@
 from typing import Any
+import re
 
 from .models import DatabaseTarget, Inventory
 from .normalize import normalize_sql
@@ -58,12 +59,17 @@ def _connect(connection_string: str):
     return pyodbc.connect(connection_string, timeout=30)
 
 
+def _safe_error(exc: Exception) -> str:
+    message = str(exc)
+    return re.sub(r"(?i)(pwd|password)\s*=\s*(\{[^}]*\}|[^;\s]*)", r"\1=[REDACTED]", message)
+
+
 def collect(target: DatabaseTarget) -> Inventory:
     inventory = Inventory(target=target.name)
     try:
         connection = _connect(target.connection_string)
     except Exception as exc:
-        inventory.errors.append({"stage": "connect", "message": str(exc)})
+        inventory.errors.append({"stage": "connect", "message": _safe_error(exc)})
         return inventory
     try:
         with connection:
@@ -73,7 +79,7 @@ def collect(target: DatabaseTarget) -> Inventory:
                 _collect_indexes(cursor, inventory)
                 _collect_constraints(cursor, inventory)
     except Exception as exc:
-        inventory.errors.append({"stage": "collect", "message": str(exc)})
+        inventory.errors.append({"stage": "collect", "message": _safe_error(exc)})
     return inventory
 
 
@@ -85,7 +91,7 @@ def _collect_objects(cursor: Any, inventory: Inventory) -> None:
             inventory.objects[key] = {"schema": schema, "name": name,
                                       "type": type_desc, "definition": normalize_sql(definition)}
     except Exception as exc:
-        inventory.errors.append({"stage": "objects", "message": str(exc)})
+        inventory.errors.append({"stage": "objects", "message": _safe_error(exc)})
 
 
 def _collect_columns(cursor: Any, inventory: Inventory) -> None:
@@ -98,7 +104,7 @@ def _collect_columns(cursor: Any, inventory: Inventory) -> None:
                                       "precision": precision, "scale": scale,
                                       "is_nullable": bool(nullable), "default": normalize_sql(default)}
     except Exception as exc:
-        inventory.errors.append({"stage": "columns", "message": str(exc)})
+        inventory.errors.append({"stage": "columns", "message": _safe_error(exc)})
 
 
 def _collect_indexes(cursor: Any, inventory: Inventory) -> None:
@@ -110,7 +116,7 @@ def _collect_indexes(cursor: Any, inventory: Inventory) -> None:
                                       "type": index_type, "is_unique": bool(unique),
                                       "is_primary_key": bool(primary), "columns": columns}
     except Exception as exc:
-        inventory.errors.append({"stage": "indexes", "message": str(exc)})
+        inventory.errors.append({"stage": "indexes", "message": _safe_error(exc)})
 
 
 def _collect_constraints(cursor: Any, inventory: Inventory) -> None:
@@ -121,4 +127,4 @@ def _collect_constraints(cursor: Any, inventory: Inventory) -> None:
             inventory.objects[key] = {"schema": schema, "table": table, "name": name,
                                       "type": constraint_type, "reference": reference}
     except Exception as exc:
-        inventory.errors.append({"stage": "constraints", "message": str(exc)})
+        inventory.errors.append({"stage": "constraints", "message": _safe_error(exc)})

@@ -21,6 +21,18 @@ The configuration file is JSON. Use `env:VARIABLE_NAME` to keep credentials out 
 }
 ```
 
+Credentials can also be supplied for every configured target through the CLI. Prefer standard input so the password is not exposed in shell history or the process list:
+
+```bash
+printf '%s\n' "$DRIFTWATCH_PASSWORD" | driftwatch \
+  --config examples/config.json \
+  --username app_user \
+  --password-stdin \
+  --output report.json
+```
+
+`--password PASSWORD` is supported for automation but may be visible to other local users through the process list. CLI credentials override/add `UID` and `PWD` in memory and are never written to reports.
+
 Exit code `0` means no findings, `2` means differences/anomalies were found, and `1` means a configuration error. Connection or collection failures appear in the report and connection strings are never included.
 
 ## Docker
