@@ -30,6 +30,8 @@ def load_targets(path: str | Path) -> list[DatabaseTarget]:
 
 def _odbc_value(value: str) -> str:
     """Quote an ODBC value so semicolons and closing braces stay inside the value."""
+    if not any(character in value for character in ";{}"):
+        return value
     return "{" + value.replace("}", "}}") + "}"
 
 
