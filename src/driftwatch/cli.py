@@ -270,7 +270,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.previous:
             from .lifecycle import classify_findings, load_previous_report
 
-            all_findings = classify_findings(all_findings, load_previous_report(args.previous))
+            previous = load_previous_report(args.previous)
+            if "snapshot_version" in previous:
+                previous_inventory = inventory_from_snapshot(args.previous)
+                previous_findings = [
+                    finding
+                    for actual in inventories
+                    if actual.status != CollectionStatus.FAILED
+                    for finding in compare(previous_inventory, actual)
+                ]
+                previous = {"findings": [finding.as_dict() for finding in previous_findings]}
+            all_findings = classify_findings(all_findings, previous)
         evaluated: PolicyResult = policy.evaluate(all_findings)
         findings = select_findings(
             evaluated.findings,

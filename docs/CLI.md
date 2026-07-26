@@ -99,8 +99,8 @@ identity, kind, and property rather than timestamps or values.
 - `2`: at least one finding meets the configured `--fail-on` threshold.
 - `1`: configuration, credential, or collection error.
 
-`--previous REPORT.json` adds `NEW`, `EXISTING`, and `RESOLVED` lifecycle
-labels. `explain --report REPORT.json --fingerprint HASH` prints one finding;
+`--previous REPORT.json` or `--previous SNAPSHOT.json` adds `NEW`, `EXISTING`,
+and `RESOLVED` lifecycle labels. `explain --report REPORT.json --fingerprint HASH` prints one finding;
 `inspect` prints the selected report subset. `config validate --config PATH`
 validates configuration without connecting to a database.
 
