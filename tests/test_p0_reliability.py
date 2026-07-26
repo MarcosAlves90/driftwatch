@@ -9,12 +9,11 @@ from driftwatch.models import (
     CollectionSectionStatus,
     CollectionStatus,
     ComparisonStrategy,
-    Finding,
+    DatabaseTarget,
     Inventory,
 )
 from driftwatch.report import build_report
 from driftwatch.secrets import redact_secrets, split_connection_string
-from driftwatch.models import DatabaseTarget
 
 
 def _sections(**overrides):
@@ -61,8 +60,12 @@ def test_baseline_strategy_compares_only_reference_to_each_actual():
 
 
 def test_semantic_column_diff_reports_property_expected_actual_and_severity():
-    left = Inventory("prod", {"COLUMN|dbo.Users.email": {"data_type": "varchar", "max_length": 255, "is_nullable": True}})
-    right = Inventory("staging", {"COLUMN|dbo.Users.email": {"data_type": "varchar", "max_length": 100, "is_nullable": False}})
+    left = Inventory(
+        "prod", {"COLUMN|dbo.Users.email": {"data_type": "varchar", "max_length": 255, "is_nullable": True}}
+    )
+    right = Inventory(
+        "staging", {"COLUMN|dbo.Users.email": {"data_type": "varchar", "max_length": 100, "is_nullable": False}}
+    )
     findings = compare(left, right)
     assert {finding.property for finding in findings} == {"max_length", "is_nullable"}
     assert {finding.kind for finding in findings} == {"column_length_changed", "column_nullability_changed"}
@@ -160,9 +163,7 @@ def test_secret_redaction_covers_multiple_driver_secret_names():
 
 
 def test_connection_parser_separates_spaced_secret_aliases():
-    base, credentials = split_connection_string(
-        "Server=db;Client Secret=client-value;Access Token=access-value"
-    )
+    base, credentials = split_connection_string("Server=db;Client Secret=client-value;Access Token=access-value")
     assert base == "Server=db"
     assert credentials.client_secret == "client-value"
     assert credentials.access_token == "access-value"
@@ -177,14 +178,18 @@ def test_database_target_repr_and_report_do_not_expose_connection_secrets():
 
 def test_config_accepts_explicit_baseline_and_strategy(tmp_path):
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({
-        "baseline": "prod",
-        "strategy": "baseline",
-        "targets": [
-            {"name": "prod", "connection_string": "Server=prod"},
-            {"name": "dev", "connection_string": "Server=dev"},
-        ],
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "baseline": "prod",
+                "strategy": "baseline",
+                "targets": [
+                    {"name": "prod", "connection_string": "Server=prod"},
+                    {"name": "dev", "connection_string": "Server=dev"},
+                ],
+            }
+        )
+    )
     config = load_config(path)
     assert config.baseline == "prod"
     assert config.strategy == ComparisonStrategy.BASELINE

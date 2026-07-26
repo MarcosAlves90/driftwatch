@@ -1,0 +1,8 @@
+{
+  "name": "driftwatch-quality-gates",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "verify": "if [ -x .venv/bin/python ]; then .venv/bin/python -m pytest -q; else python3 -m pytest -q; fi"
+  }
+}

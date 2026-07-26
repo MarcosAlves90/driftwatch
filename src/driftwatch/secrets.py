@@ -2,7 +2,6 @@ import re
 
 from .models import Credentials
 
-
 _SECRET_KEYS = {
     "pwd": "password",
     "password": "password",

@@ -27,6 +27,16 @@ All notable changes to this project are documented here.
   function metadata coverage.
 - SARIF output, GitHub summaries/annotations, stable report versions, and
   finding fingerprints.
+- Migration effect verification with expected, missing, and unexpected
+  classifications, file-based finding lifecycle, dependency graphs, bounded
+  blast-radius and impact metadata.
+- CLI intents for compare, explain, inspect, and config validation, plus
+  summary-only, quiet, HTML, lifecycle, and enriched CSV output.
+- Configurable SQL normalization, optional Azure Default Credential/Managed
+  Identity token providers, and catalog coverage for sequences, triggers,
+  user-defined types, temporal tables, and schemas.
+- Ruff, Mypy, pytest-cov, Hypothesis, golden-output guidance, and a Python
+  3.11–3.13 CI matrix.
 
 ### Fixed
 
@@ -37,3 +47,10 @@ All notable changes to this project are documented here.
 - Added compatibility fallbacks for legacy SQL Server catalog shapes.
 - Fixed UNIQUE constraint collection when the base constraint row is created
   before its ordered columns are merged.
+- Preserved legacy CLI/report behavior while adding the P2 command contracts;
+  SQL Server Docker key import is now non-interactive as well.
+
+### Removed
+
+- Versioned packaging metadata remains excluded from source control; generated
+  egg-info is no longer part of the repository contract.

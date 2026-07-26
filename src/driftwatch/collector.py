@@ -1,5 +1,6 @@
-from typing import Any, Callable
+import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable
 
 from .models import (
     CollectionSection,
@@ -9,7 +10,7 @@ from .models import (
     Inventory,
     ObjectId,
 )
-from .normalize import normalize_sql
+from .normalize import NormalizationOptions, normalize_sql
 from .secrets import redact_secrets
 
 OBJECT_QUERY = """
@@ -131,6 +132,45 @@ ORDER BY s.name, t.name, kc.name
 
 DATABASE_METADATA_QUERY = "SELECT CAST(DATABASEPROPERTYEX(DB_NAME(), 'Collation') AS nvarchar(128))"
 
+SEQUENCE_QUERY = """
+SELECT s.name, seq.name, ty.name, seq.start_value, seq.increment, seq.minimum_value,
+       seq.maximum_value, seq.is_cycling
+FROM sys.sequences AS seq JOIN sys.schemas AS s ON s.schema_id = seq.schema_id
+JOIN sys.types AS ty ON ty.user_type_id = seq.user_type_id
+ORDER BY s.name, seq.name
+"""
+TRIGGER_QUERY = """
+SELECT s.name, t.name, tr.name, tr.is_disabled, m.definition
+FROM sys.triggers AS tr JOIN sys.tables AS t ON t.object_id = tr.parent_id
+JOIN sys.schemas AS s ON s.schema_id = t.schema_id
+LEFT JOIN sys.sql_modules AS m ON m.object_id = tr.object_id
+WHERE tr.is_ms_shipped = 0 ORDER BY s.name, t.name, tr.name
+"""
+UDT_QUERY = """
+SELECT s.name, ty.name, base.name, ty.max_length, ty.precision, ty.scale, ty.is_nullable
+FROM sys.types AS ty JOIN sys.schemas AS s ON s.schema_id = ty.schema_id
+JOIN sys.types AS base ON base.user_type_id = ty.system_type_id
+WHERE ty.is_user_defined = 1 ORDER BY s.name, ty.name
+"""
+SCHEMA_QUERY = "SELECT name, principal_id FROM sys.schemas WHERE name NOT IN ('guest','sys','INFORMATION_SCHEMA','db_owner','db_accessadmin','db_securityadmin','db_ddladmin','db_backupoperator','db_datareader','db_datawriter','db_denydatareader','db_denydatawriter') ORDER BY name"
+TEMPORAL_TABLE_QUERY = """
+SELECT s.name, t.name, t.temporal_type, hs.name, ht.name, t.history_retention_period
+FROM sys.tables AS t JOIN sys.schemas AS s ON s.schema_id=t.schema_id
+LEFT JOIN sys.tables AS ht ON ht.object_id=t.history_table_id
+LEFT JOIN sys.schemas AS hs ON hs.schema_id=ht.schema_id
+WHERE t.is_ms_shipped=0 AND t.temporal_type <> 0 ORDER BY s.name, t.name
+"""
+DEPENDENCY_QUERY = """
+SELECT rs.name, ro.name, s.name, o.name
+FROM sys.sql_expression_dependencies AS d
+JOIN sys.objects AS ro ON ro.object_id = d.referenced_id
+JOIN sys.schemas AS rs ON rs.schema_id = ro.schema_id
+JOIN sys.objects AS o ON o.object_id = d.referencing_id
+JOIN sys.schemas AS s ON s.schema_id = o.schema_id
+WHERE d.referenced_id IS NOT NULL AND ro.is_ms_shipped = 0 AND o.is_ms_shipped = 0
+ORDER BY rs.name, ro.name, s.name, o.name
+"""
+
 
 def _connect(connection_string: str, timeout: int = 30):
     import pyodbc
@@ -146,17 +186,24 @@ def _object_key(object_type: str, schema: str, name: str, subobject: str | None 
     return str(ObjectId(object_type, schema, name, subobject))
 
 
+def _normalize(inventory: Inventory, value: str | None) -> str | None:
+    options = inventory.metadata.get("_normalization")
+    return normalize_sql(value, options if isinstance(options, NormalizationOptions) else None)
+
+
 def _new_inventory(target: str) -> Inventory:
-    sections = {
-        section.value: CollectionSectionStatus(CollectionStatus.FAILED)
-        for section in CollectionSection
-    }
+    sections = {section.value: CollectionSectionStatus(CollectionStatus.FAILED) for section in CollectionSection}
     return Inventory(target=target, status=CollectionStatus.FAILED, sections=sections)
 
 
-def _record_section_error(inventory: Inventory, section: CollectionSection, exc: Exception) -> None:
+def _record_section_error(
+    inventory: Inventory, section: CollectionSection, exc: Exception, started: float | None = None
+) -> None:
     message = _safe_error(exc)
-    inventory.errors.append({"stage": section.value, "message": message})
+    error = {"stage": section.value, "message": message, "error_type": type(exc).__name__}
+    if started is not None:
+        error["duration_seconds"] = f"{time.perf_counter() - started:.6f}"
+    inventory.errors.append(error)
     inventory.sections[section.value] = CollectionSectionStatus(CollectionStatus.FAILED, message)
 
 
@@ -177,12 +224,15 @@ def collect(
     target: DatabaseTarget,
     connect_timeout: int = 30,
     query_timeout: int | None = None,
+    normalization: NormalizationOptions | None = None,
 ) -> Inventory:
     if connect_timeout < 1:
         raise ValueError("connect_timeout must be positive")
     if query_timeout is not None and query_timeout < 1:
         raise ValueError("query_timeout must be positive")
     inventory = _new_inventory(target.name)
+    if normalization is not None:
+        inventory.metadata["_normalization"] = normalization
     try:
         connection = (
             _connect(target.connection_string)
@@ -203,6 +253,7 @@ def collect(
         (CollectionSection.CONSTRAINTS, _collect_constraints),
         (CollectionSection.DATABASE, _collect_database_metadata),
     )
+    section_timings: dict[str, float] = {}
     try:
         with connection:
             with connection.cursor() as cursor:
@@ -212,16 +263,20 @@ def collect(
                     except (AttributeError, TypeError):
                         pass
                 for section, job in jobs:
+                    section_started = time.perf_counter()
                     try:
                         job(cursor, inventory)
+                        section_timings[section.value] = round(time.perf_counter() - section_started, 6)
                         inventory.sections[section.value] = CollectionSectionStatus(CollectionStatus.SUCCESS)
                     except Exception as exc:
-                        _record_section_error(inventory, section, exc)
+                        _record_section_error(inventory, section, exc, section_started)
+                        section_timings[section.value] = round(time.perf_counter() - section_started, 6)
     except Exception as exc:
         message = _safe_error(exc)
         inventory.errors.append({"stage": "collect", "message": message})
         inventory.status = CollectionStatus.PARTIAL
     _finalize_status(inventory)
+    inventory.metadata["timings"] = section_timings
     return inventory
 
 
@@ -253,10 +308,7 @@ def collect_many(
             return inventory
 
     with ThreadPoolExecutor(max_workers=min(workers, len(targets))) as executor:
-        futures = [
-            executor.submit(run, target)
-            for target in targets
-        ]
+        futures = [executor.submit(run, target) for target in targets]
         return [future.result() for future in futures]
 
 
@@ -268,8 +320,99 @@ def _collect_objects(cursor: Any, inventory: Inventory) -> None:
             "schema": schema,
             "name": name,
             "type": type_desc,
-            "definition": normalize_sql(definition),
+            "definition": _normalize(inventory, definition),
         }
+    _collect_optional_catalog(cursor, inventory, SEQUENCE_QUERY, "SEQUENCE", _sequence_row)
+    _collect_optional_catalog(cursor, inventory, TRIGGER_QUERY, "TRIGGER", _trigger_row)
+    _collect_optional_catalog(cursor, inventory, UDT_QUERY, "USER_DEFINED_TYPE", _udt_row)
+    _collect_optional_catalog(cursor, inventory, SCHEMA_QUERY, "SCHEMA", _schema_row)
+    try:
+        cursor.execute(TEMPORAL_TABLE_QUERY)
+        for schema, name, temporal_type, history_schema, history_name, retention in cursor.fetchall():
+            item = inventory.objects.setdefault(
+                _object_key("TABLE", schema, name), {"schema": schema, "name": name, "type": "TABLE"}
+            )
+            item.update(
+                {
+                    "temporal_type": temporal_type,
+                    "history_schema": history_schema,
+                    "history_table": history_name,
+                    "history_retention_period": retention,
+                }
+            )
+    except Exception:
+        pass
+    try:
+        cursor.execute(DEPENDENCY_QUERY)
+        for referenced_schema, referenced_name, schema, name in cursor.fetchall():
+            dependent_key = _object_key("OBJECT", schema, name)
+            inventory.objects.setdefault(dependent_key, {"schema": schema, "name": name, "type": "OBJECT"})
+            inventory.objects[dependent_key].setdefault("dependencies", []).append(
+                _object_key("OBJECT", referenced_schema, referenced_name)
+            )
+    except Exception:
+        pass
+
+
+def _collect_optional_catalog(cursor: Any, inventory: Inventory, query: str, object_type: str, mapper) -> None:
+    try:
+        cursor.execute(query)
+        rows = cursor.fetchall()
+    except Exception:
+        return
+    for row in rows:
+        schema, name, value = mapper(row, inventory)
+        item = {"schema": schema, "name": name, "type": object_type, **value}
+        inventory.objects[_object_key(object_type, schema, name)] = item
+
+
+def _sequence_row(row, _inventory=None):
+    schema, name, data_type, start, increment, minimum, maximum, cycling = row
+    return (
+        schema,
+        name,
+        {
+            "data_type": data_type,
+            "start_value": start,
+            "increment": increment,
+            "minimum": minimum,
+            "maximum": maximum,
+            "is_cycling": bool(cycling),
+        },
+    )
+
+
+def _trigger_row(row, inventory=None):
+    schema, table, name, disabled, definition = row
+    return (
+        schema,
+        f"{table}.{name}",
+        {
+            "table": table,
+            "is_disabled": bool(disabled),
+            "definition": _normalize(inventory, definition) if inventory is not None else normalize_sql(definition),
+        },
+    )
+
+
+def _udt_row(row, _inventory=None):
+    schema, name, base, max_length, precision, scale, nullable = row
+    return (
+        schema,
+        name,
+        {
+            "base_type": base,
+            "max_length": max_length,
+            "precision": precision,
+            "scale": scale,
+            "is_nullable": bool(nullable),
+        },
+    )
+
+
+def _schema_row(row, _inventory=None):
+    name, principal_id = row
+    return "", name, {"principal_id": principal_id}
 
 
 def _collect_columns(cursor: Any, inventory: Inventory) -> None:
@@ -285,12 +428,28 @@ def _collect_columns(cursor: Any, inventory: Inventory) -> None:
     for row in rows:
         if len(row) == 9:
             schema, table, name, data_type, max_length, precision, scale, nullable, default = row
-            default_name = collation = is_computed = computed_definition = is_persisted = is_identity = seed = increment = None
+            default_name = collation = is_computed = computed_definition = is_persisted = is_identity = seed = (
+                increment
+            ) = None
         else:
             (
-                schema, table, name, data_type, max_length, precision, scale, nullable,
-                default_name, default, collation, is_computed, computed_definition, is_persisted,
-                is_identity, seed, increment,
+                schema,
+                table,
+                name,
+                data_type,
+                max_length,
+                precision,
+                scale,
+                nullable,
+                default_name,
+                default,
+                collation,
+                is_computed,
+                computed_definition,
+                is_persisted,
+                is_identity,
+                seed,
+                increment,
             ) = row
         key = _object_key("COLUMN", schema, table, name)
         inventory.objects[key] = {
@@ -302,11 +461,11 @@ def _collect_columns(cursor: Any, inventory: Inventory) -> None:
             "precision": precision,
             "scale": scale,
             "is_nullable": bool(nullable),
-            "default": normalize_sql(default),
+            "default": _normalize(inventory, default),
             "default_constraint_name": default_name,
             "collation": collation,
             "is_computed": bool(is_computed),
-            "computed_expression": normalize_sql(computed_definition),
+            "computed_expression": _normalize(inventory, computed_definition),
             "is_persisted": bool(is_persisted) if is_persisted is not None else None,
             "is_identity": bool(is_identity),
             "identity_seed": seed,
@@ -334,8 +493,17 @@ def _collect_indexes(cursor: Any, inventory: Inventory) -> None:
             }
             continue
         (
-            schema, table, name, index_type, unique, primary, filter_definition,
-            _index_column_id, key_ordinal, included, column_name,
+            schema,
+            table,
+            name,
+            index_type,
+            unique,
+            primary,
+            filter_definition,
+            _index_column_id,
+            key_ordinal,
+            included,
+            column_name,
         ) = row
         key = _object_key("INDEX", schema, table, name)
         item = inventory.objects.setdefault(
@@ -349,7 +517,7 @@ def _collect_indexes(cursor: Any, inventory: Inventory) -> None:
                 "is_primary_key": bool(primary),
                 "key_columns": [],
                 "include_columns": [],
-                "filter": normalize_sql(filter_definition),
+                "filter": _normalize(inventory, filter_definition),
             },
         )
         if included:
@@ -375,8 +543,16 @@ def _collect_constraints(cursor: Any, inventory: Inventory) -> None:
         cursor.execute(FOREIGN_KEY_QUERY)
         for row in cursor.fetchall():
             (
-                schema, table, name, referenced_schema, referenced_table,
-                local_column, referenced_column, ordinal, on_delete, on_update,
+                schema,
+                table,
+                name,
+                referenced_schema,
+                referenced_table,
+                local_column,
+                referenced_column,
+                ordinal,
+                on_delete,
+                on_update,
             ) = row
             key = _object_key("CONSTRAINT", schema, table, name)
             item = inventory.objects.setdefault(
@@ -415,7 +591,7 @@ def _collect_constraints(cursor: Any, inventory: Inventory) -> None:
             "name": name,
             "type": "CHECK_CONSTRAINT",
             "column": column,
-            "expression": normalize_sql(expression),
+            "expression": _normalize(inventory, expression),
             "is_not_for_replication": bool(not_for_replication),
         }
     try:

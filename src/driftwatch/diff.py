@@ -26,7 +26,6 @@ def _missing_finding(
     right_value: dict | None,
 ) -> Finding:
     object_type, object_name = key.split("|", 1)
-    object_value = right_value if left_value is None else left_value
     actual_missing = right_value is None
     kind = "missing_right" if actual_missing else "missing_left"
     expected = left_value
@@ -41,10 +40,7 @@ def _missing_finding(
             object_type,
             missing_side="actual" if actual_missing else "expected",
         ),
-        message=(
-            f"object exists only in {left.target}" if actual_missing
-            else f"object exists only in {right.target}"
-        ),
+        message=(f"object exists only in {left.target}" if actual_missing else f"object exists only in {right.target}"),
         left=left_value,
         right=right_value,
         targets=(target,),
@@ -99,7 +95,15 @@ def compare(left: Inventory, right: Inventory) -> list[Finding]:
                 )
             )
         elif left_value != right_value:
-            differ = DIFFER_REGISTRY.get(object_type, DIFFER_REGISTRY.get("OBJECT"))
+            differ = DIFFER_REGISTRY.get(object_type)
+            if (
+                differ is None
+                and object_type == "TABLE"
+                and ("temporal_type" in left_value or "temporal_type" in right_value)
+            ):
+                from .differs import CatalogDiffer
+
+                differ = CatalogDiffer()
             if differ is None:
                 from .differs import ObjectDefinitionDiffer
 
@@ -144,6 +148,6 @@ def compare_all(
         ]
     findings = []
     for index, left in enumerate(items[:-1]):
-        for right in items[index + 1:]:
+        for right in items[index + 1 :]:
             findings.extend(compare(left, right))
     return findings

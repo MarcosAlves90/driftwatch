@@ -1,10 +1,9 @@
-from dataclasses import dataclass, field
-from enum import Enum, StrEnum
 import builtins
 import hashlib
 import json
-from typing import ClassVar
-from typing import Any
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Any, ClassVar
 
 
 class CollectionStatus(StrEnum):
@@ -82,6 +81,12 @@ class FindingKind(StrEnum):
     VIEW_DEFINITION_CHANGED = "view_definition_changed"
     STORED_PROCEDURE_DEFINITION_CHANGED = "stored_procedure_definition_changed"
     FUNCTION_DEFINITION_CHANGED = "function_definition_changed"
+    SEQUENCE_PROPERTY_CHANGED = "sequence_property_changed"
+    TRIGGER_DEFINITION_CHANGED = "trigger_definition_changed"
+    TRIGGER_STATE_CHANGED = "trigger_state_changed"
+    USER_DEFINED_TYPE_CHANGED = "user_defined_type_changed"
+    TEMPORAL_METADATA_CHANGED = "temporal_metadata_changed"
+    SCHEMA_CHANGED = "schema_changed"
 
 
 @dataclass(frozen=True)
@@ -160,6 +165,12 @@ class ModuleDefinition:
     definition: str | None = None
 
 
+class FindingLifecycle(StrEnum):
+    NEW = "NEW"
+    EXISTING = "EXISTING"
+    RESOLVED = "RESOLVED"
+
+
 def _canonical(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
 
@@ -195,8 +206,7 @@ class Credentials:
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, Credentials) and all(
-            getattr(self, name) == getattr(other, name)
-            for name in self.__slots__
+            getattr(self, name) == getattr(other, name) for name in self.__slots__
         )
 
 
@@ -235,7 +245,9 @@ class DatabaseTarget:
     @property
     def connection_string(self) -> str:
         """Resolve credentials only for the connection boundary."""
-        return self.connection.resolved()
+        connection = self.connection
+        assert isinstance(connection, ConnectionConfig)
+        return connection.resolved()
 
 
 @dataclass
@@ -260,14 +272,16 @@ class Inventory:
             "object_count": len(self.objects),
             "sections": {name: state.as_dict() for name, state in sorted(self.sections.items())},
             "errors": [
-                {key: redact_secrets(value) if key == "message" and isinstance(value, str) else value
-                 for key, value in error.items()}
+                {
+                    key: redact_secrets(value) if key == "message" and isinstance(value, str) else value
+                    for key, value in error.items()
+                }
                 for error in self.errors
             ],
             "metadata": {
                 key: self.metadata[key]
                 for key in sorted(self.metadata)
-                if key in {"database_collation", "schema_version", "snapshot_digest"}
+                if key in {"database_collation", "schema_version", "snapshot_digest", "timings"}
             },
         }
 
@@ -285,6 +299,9 @@ class Finding:
     property: str | None = None
     expected: Any = None
     actual: Any = None
+    lifecycle: FindingLifecycle | None = None
+    planned: bool | None = None
+    impact: dict[str, Any] | None = None
 
     @builtins.property
     def fingerprint(self) -> str:
@@ -297,10 +314,24 @@ class Finding:
         return hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
 
     def as_dict(self) -> dict[str, Any]:
-        return {"kind": self.kind, "object_type": self.object_type,
-                "object_name": self.object_name, "severity": self.severity,
-                "message": self.message, "left": self.left, "right": self.right,
-                "targets": list(self.targets), "property": self.property,
-                "expected": self.expected if self.expected is not None else self.left,
-                "actual": self.actual if self.actual is not None else self.right,
-                "fingerprint": self.fingerprint}
+        result = {
+            "kind": self.kind,
+            "object_type": self.object_type,
+            "object_name": self.object_name,
+            "severity": self.severity,
+            "message": self.message,
+            "left": self.left,
+            "right": self.right,
+            "targets": list(self.targets),
+            "property": self.property,
+            "expected": self.expected if self.expected is not None else self.left,
+            "actual": self.actual if self.actual is not None else self.right,
+            "fingerprint": self.fingerprint,
+        }
+        if self.lifecycle is not None:
+            result["lifecycle"] = self.lifecycle.value
+        if self.planned is not None:
+            result["planned"] = self.planned
+        if self.impact is not None:
+            result["impact"] = self.impact
+        return result

@@ -60,6 +60,18 @@ driftwatch check --config examples/config.json --snapshot schemas/prod.json \
   --format sarif --fail-on breaking
 ```
 
+The CLI also exposes `compare`, `snapshot`, `explain`, `inspect`, and
+`config validate` intents. `--summary-only` emits aggregate totals and
+`--quiet` suppresses stdout while preserving exit codes. Use `--previous` to
+classify findings as NEW, EXISTING, or RESOLVED and `--format html` for a
+self-contained review report.
+
+Migration verification is deliberately controlled by the caller: capture
+before/after inventories around a migration in an ephemeral or approved
+database, then call `driftwatch.migration.verify_migration` to compare the
+semantic effect and expected fingerprints. Driftwatch never applies a
+migration to an implicit database.
+
 Snapshots contain normalized schema metadata and a content digest, never
 connection strings or credentials. Their structural content is sorted so
 small schema changes produce focused Git diffs. A reusable composite action is

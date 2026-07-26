@@ -2,7 +2,7 @@ import json
 import os
 from pathlib import Path
 
-from .models import ComparisonStrategy, Credentials, DatabaseTarget
+from .models import ComparisonStrategy, ConnectionConfig, Credentials, DatabaseTarget
 
 
 def _resolve(value: str) -> str:
@@ -28,6 +28,8 @@ class DriftConfig:
         workers: int = 4,
         connect_timeout: int = 30,
         query_timeout: int | None = None,
+        normalization: dict | None = None,
+        auth: str | None = None,
     ) -> None:
         self.targets = targets
         self.baseline = baseline
@@ -35,6 +37,8 @@ class DriftConfig:
         self.workers = workers
         self.connect_timeout = connect_timeout
         self.query_timeout = query_timeout
+        self.normalization = normalization or {}
+        self.auth = auth
 
 
 def load_config(path: str | Path, *, min_targets: int = 2) -> DriftConfig:
@@ -63,13 +67,22 @@ def load_config(path: str | Path, *, min_targets: int = 2) -> DriftConfig:
     workers = raw.get("workers", 4) if isinstance(raw, dict) else 4
     connect_timeout = raw.get("connect_timeout", 30) if isinstance(raw, dict) else 30
     query_timeout = raw.get("query_timeout") if isinstance(raw, dict) else None
+    normalization = raw.get("normalization", {}) if isinstance(raw, dict) else {}
+    if not isinstance(normalization, dict):
+        raise ValueError("normalization must be an object")
+    unknown_normalization = set(normalization) - {"ignore_whitespace", "ignore_comments", "normalize_keywords_case"}
+    if unknown_normalization:
+        raise ValueError(f"unknown normalization option(s): {', '.join(sorted(unknown_normalization))}")
+    auth = raw.get("auth") if isinstance(raw, dict) else None
+    if auth is not None and auth not in {"odbc", "azure_default", "managed_identity"}:
+        raise ValueError("auth must be odbc, azure_default, or managed_identity")
     if not isinstance(workers, int) or not 1 <= workers <= 32:
         raise ValueError("workers must be an integer from 1 to 32")
     if not isinstance(connect_timeout, int) or connect_timeout < 1:
         raise ValueError("connect_timeout must be a positive integer")
     if query_timeout is not None and (not isinstance(query_timeout, int) or query_timeout < 1):
         raise ValueError("query_timeout must be a positive integer")
-    return DriftConfig(result, baseline, strategy, workers, connect_timeout, query_timeout)
+    return DriftConfig(result, baseline, strategy, workers, connect_timeout, query_timeout, normalization, auth)
 
 
 def _odbc_value(value: str) -> str:
@@ -87,4 +100,10 @@ def apply_cli_credentials(
     if not username or password is None:
         raise ValueError("--username and a password source must be provided together")
     credentials = Credentials(username=username, password=password)
-    return [DatabaseTarget(target.name, target.connection.with_credentials(credentials)) for target in targets]
+    secured = []
+    for target in targets:
+        connection = target.connection
+        if not isinstance(connection, ConnectionConfig):
+            raise ValueError("target connection is invalid")
+        secured.append(DatabaseTarget(target.name, connection.with_credentials(credentials)))
+    return secured

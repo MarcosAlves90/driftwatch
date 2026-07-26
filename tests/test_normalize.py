@@ -10,7 +10,10 @@ def test_normalize_sql_preserves_none():
 
 
 def test_normalize_sql_preserves_literal_case_and_comment_markers():
-    assert normalize_sql("SELECT 'HELLO -- not a comment' /* comment */ FROM t") == "select 'HELLO -- not a comment' from t"
+    assert (
+        normalize_sql("SELECT 'HELLO -- not a comment' /* comment */ FROM t")
+        == "select 'HELLO -- not a comment' from t"
+    )
 
 
 def test_normalize_sql_preserves_escaped_quotes_in_literals():

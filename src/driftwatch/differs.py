@@ -205,8 +205,45 @@ class ObjectDefinitionDiffer:
         ]
 
 
+class CatalogDiffer:
+    """Compare non-column catalog objects with explicit object-specific kinds."""
+
+    _kinds = {
+        "SEQUENCE": "sequence_property_changed",
+        "TRIGGER": "trigger_definition_changed",
+        "USER_DEFINED_TYPE": "user_defined_type_changed",
+        "SCHEMA": "schema_changed",
+        "TABLE": "temporal_metadata_changed",
+    }
+
+    def diff(self, object_type, object_name, expected, actual, targets):
+        findings = []
+        for property_name in sorted(set(expected) | set(actual)):
+            if property_name in {"schema", "name", "type"}:
+                continue
+            before, after = expected.get(property_name), actual.get(property_name)
+            if before != after:
+                findings.append(
+                    _finding(
+                        self._kinds.get(object_type, "definition_mismatch"),
+                        object_type,
+                        object_name,
+                        f"{object_type.lower()} property {property_name} changed",
+                        before,
+                        after,
+                        property_name,
+                        targets,
+                    )
+                )
+        return findings
+
+
 DIFFER_REGISTRY: dict[str, Differ] = {
     "COLUMN": ColumnDiffer(),
     "INDEX": IndexDiffer(),
     "CONSTRAINT": ConstraintDiffer(),
+    "SEQUENCE": CatalogDiffer(),
+    "TRIGGER": CatalogDiffer(),
+    "USER_DEFINED_TYPE": CatalogDiffer(),
+    "SCHEMA": CatalogDiffer(),
 }

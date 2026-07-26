@@ -11,9 +11,7 @@ def _findings():
 
 
 def test_select_findings_composes_case_insensitive_filters_and_search():
-    selected = select_findings(
-        _findings(), kinds=["missing_left,missing_right"], targets=["PROD"], query="users"
-    )
+    selected = select_findings(_findings(), kinds=["missing_left,missing_right"], targets=["PROD"], query="users")
     assert [finding.object_name for finding in selected] == ["dbo.Users"]
 
 

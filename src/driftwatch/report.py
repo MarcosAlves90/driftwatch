@@ -1,6 +1,7 @@
-import json
 import csv
+import html
 import io
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -62,13 +63,16 @@ def write_json(report: dict[str, Any], output: str | None) -> None:
 
 
 def render_text(
-    findings: list[Finding], analysis: dict[str, Any], output: str | None,
+    findings: list[Finding],
+    analysis: dict[str, Any],
+    output: str | None,
     inventories: list[Inventory] | None = None,
     strategy: ComparisonStrategy | None = None,
     baseline: str | None = None,
     ignored_count: int = 0,
     allowed_count: int = 0,
     verbose: bool = False,
+    summary_only: bool = False,
 ) -> None:
     lines = [f"Findings: {analysis['selected_count']}"]
     if strategy is not None:
@@ -91,13 +95,13 @@ def render_text(
             lines.append(f"- {inventory.target}: {inventory.status.value}")
             for error in inventory.as_report()["errors"]:
                 lines.append(f"  {error['stage']}: {error['message']}")
-    if findings:
+    if findings and not summary_only:
         lines.append("")
         for finding in findings:
             lines.append(
                 f"[{finding.severity}] {finding.kind} {finding.object_type}|{finding.object_name}: {finding.message}"
             )
-    else:
+    elif not summary_only:
         lines.append("No findings match the selected filters.")
     rendered = "\n".join(lines) + "\n"
     if output:
@@ -107,15 +111,27 @@ def render_text(
         print(rendered, end="")
 
 
-def write_csv(findings: list[Finding], output: str | None) -> None:
+def write_csv(findings: list[Finding], output: str | None, *, enhanced: bool = False) -> None:
     stream = io.StringIO(newline="")
     writer = csv.writer(stream)
-    writer.writerow([
-        "kind", "object_type", "object_name", "severity", "property", "message",
-        "targets", "expected", "actual", "left", "right",
-    ])
+    columns = [
+        "kind",
+        "object_type",
+        "object_name",
+        "severity",
+        "property",
+        "message",
+        "targets",
+        "expected",
+        "actual",
+        "left",
+        "right",
+    ]
+    if enhanced:
+        columns += ["baseline", "fingerprint"]
+    writer.writerow(columns)
     for finding in findings:
-        writer.writerow([
+        row = [
             finding.kind,
             finding.object_type,
             finding.object_name,
@@ -127,7 +143,10 @@ def write_csv(findings: list[Finding], output: str | None) -> None:
             json.dumps(finding.actual, ensure_ascii=False, sort_keys=True),
             json.dumps(finding.left, ensure_ascii=False, sort_keys=True),
             json.dumps(finding.right, ensure_ascii=False, sort_keys=True),
-        ])
+        ]
+        if enhanced:
+            row += [finding.targets[0] if finding.targets else "", finding.fingerprint]
+        writer.writerow(row)
     rendered = stream.getvalue()
     if output:
         with open(output, "w", encoding="utf-8", newline="") as file:
@@ -136,39 +155,84 @@ def write_csv(findings: list[Finding], output: str | None) -> None:
         print(rendered, end="")
 
 
+def render_html(findings: list[Finding], analysis: dict[str, Any], output: str | None) -> None:
+    """Write a self-contained, escaped static report."""
+    rows = []
+    for finding in findings:
+        cells = [
+            finding.severity,
+            finding.kind,
+            finding.object_type,
+            finding.object_name,
+            finding.property or "",
+            finding.message,
+            str(finding.expected),
+            str(finding.actual),
+        ]
+        rows.append("<tr>" + "".join(f"<td>{html.escape(cell)}</td>" for cell in cells) + "</tr>")
+    document = (
+        """<!doctype html><meta charset="utf-8"><title>Driftwatch report</title>
+<style>body{font:14px system-ui;margin:2rem}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:.4rem;text-align:left}th{background:#f4f4f4}.critical,.breaking{font-weight:700}</style>
+<h1>Driftwatch report</h1><p>Findings: """
+        + str(analysis.get("selected_count", len(findings)))
+        + """</p><table><thead><tr><th>Severity</th><th>Kind</th><th>Type</th><th>Object</th><th>Property</th><th>Message</th><th>Expected</th><th>Actual</th></tr></thead><tbody>"""
+        + "".join(rows)
+        + """</tbody></table>
+"""
+    )
+    if output:
+        with open(output, "w", encoding="utf-8") as stream:
+            stream.write(document)
+    else:
+        print(document, end="")
+
+
 def render_sarif(findings: list[Finding], output: str | None) -> None:
     rules: dict[str, dict[str, Any]] = {}
     results: list[dict[str, Any]] = []
     level_map = {"info": "note", "warning": "warning", "breaking": "error", "critical": "error"}
     for finding in findings:
         rule_id = finding.kind
-        rules.setdefault(rule_id, {
-            "id": rule_id,
-            "name": rule_id,
-            "shortDescription": {"text": finding.message},
-            "help": {"text": "Review the schema difference against the expected state."},
-        })
-        results.append({
-            "ruleId": rule_id,
-            "level": level_map.get(finding.severity, "warning"),
-            "message": {"text": finding.message},
-            "fingerprints": {"driftwatch/v1": finding.fingerprint},
-            "properties": {
-                "severity": finding.severity,
-                "object_type": finding.object_type,
-                "object_name": finding.object_name,
-                "property": finding.property,
-                "expected": finding.expected,
-                "actual": finding.actual,
+        rules.setdefault(
+            rule_id,
+            {
+                "id": rule_id,
+                "name": rule_id,
+                "shortDescription": {"text": finding.message},
+                "help": {"text": "Review the schema difference against the expected state."},
             },
-        })
+        )
+        results.append(
+            {
+                "ruleId": rule_id,
+                "level": level_map.get(finding.severity, "warning"),
+                "message": {"text": finding.message},
+                "fingerprints": {"driftwatch/v1": finding.fingerprint},
+                "properties": {
+                    "severity": finding.severity,
+                    "object_type": finding.object_type,
+                    "object_name": finding.object_name,
+                    "property": finding.property,
+                    "expected": finding.expected,
+                    "actual": finding.actual,
+                },
+            }
+        )
     report = {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
-        "runs": [{
-            "tool": {"driver": {"name": "driftwatch", "informationUri": "https://github.com/MarcosAlves90/driftwatch", "rules": list(rules.values())}},
-            "results": results,
-        }],
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "driftwatch",
+                        "informationUri": "https://github.com/MarcosAlves90/driftwatch",
+                        "rules": list(rules.values()),
+                    }
+                },
+                "results": results,
+            }
+        ],
     }
     rendered = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     if output:

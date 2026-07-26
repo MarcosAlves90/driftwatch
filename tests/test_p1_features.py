@@ -4,13 +4,13 @@ import time
 
 import pytest
 
+from driftwatch import cli
 from driftwatch.collector import collect_many
 from driftwatch.github import annotations, job_summary
-from driftwatch.models import DatabaseTarget, Finding, Inventory, ObjectId, Severity
+from driftwatch.models import DatabaseTarget, Finding, Inventory, ObjectId
 from driftwatch.policy import load_policy
 from driftwatch.report import render_sarif
 from driftwatch.snapshot import inventory_from_snapshot, write_snapshot
-from driftwatch import cli
 
 
 def _finding(kind="missing_right", name="dbo.Users", severity="critical"):
@@ -19,19 +19,25 @@ def _finding(kind="missing_right", name="dbo.Users", severity="critical"):
 
 def test_policy_ignore_allow_and_threshold_are_applied_before_blocking(tmp_path):
     path = tmp_path / "policy.json"
-    path.write_text(json.dumps({
-        "version": 1,
-        "fail_on": "breaking",
-        "rules": {"missing_right": "warning"},
-        "ignore": ["audit.*"],
-        "allow": [{"pattern": "dbo.temp_*", "kinds": ["missing_right"], "reason": "temporary migration"}],
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "fail_on": "breaking",
+                "rules": {"missing_right": "warning"},
+                "ignore": ["audit.*"],
+                "allow": [{"pattern": "dbo.temp_*", "kinds": ["missing_right"], "reason": "temporary migration"}],
+            }
+        )
+    )
     policy = load_policy(path)
-    result = policy.evaluate([
-        _finding(name="audit.Log"),
-        _finding(name="dbo.temp_Users"),
-        _finding(name="dbo.Users"),
-    ])
+    result = policy.evaluate(
+        [
+            _finding(name="audit.Log"),
+            _finding(name="dbo.temp_Users"),
+            _finding(name="dbo.Users"),
+        ]
+    )
     assert len(result.ignored) == 1
     assert len(result.allowed) == 1
     assert result.allowed_reasons[result.allowed[0].fingerprint] == "temporary migration"
@@ -111,10 +117,16 @@ def test_github_renderers_are_bounded_and_escape_table_delimiters():
 
 def test_cli_policy_is_loaded_before_collection_and_controls_exit_code(monkeypatch, tmp_path):
     config = tmp_path / "config.json"
-    config.write_text(json.dumps({"targets": [
-        {"name": "a", "connection_string": "fixture"},
-        {"name": "b", "connection_string": "fixture"},
-    ]}))
+    config.write_text(
+        json.dumps(
+            {
+                "targets": [
+                    {"name": "a", "connection_string": "fixture"},
+                    {"name": "b", "connection_string": "fixture"},
+                ]
+            }
+        )
+    )
     policy = tmp_path / "policy.json"
     policy.write_text(json.dumps({"version": 1, "fail_on": "critical"}))
     called = []

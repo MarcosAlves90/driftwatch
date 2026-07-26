@@ -22,10 +22,20 @@ def test_report_adds_analysis_without_removing_existing_fields():
 
 
 def test_text_output_is_compact_and_csv_has_stable_columns(tmp_path, capsys):
-    finding = Finding("definition_mismatch", "VIEW", "dbo.Users", "warning", "definitions differ", targets=("dev", "prod"))
-    analysis = {"selected_count": 1, "by_severity": {"warning": 1}, "by_kind": {"definition_mismatch": 1}, "by_object_type": {"VIEW": 1}}
+    finding = Finding(
+        "definition_mismatch", "VIEW", "dbo.Users", "warning", "definitions differ", targets=("dev", "prod")
+    )
+    analysis = {
+        "selected_count": 1,
+        "by_severity": {"warning": 1},
+        "by_kind": {"definition_mismatch": 1},
+        "by_object_type": {"VIEW": 1},
+    }
     render_text([finding], analysis, None)
     assert "definitions differ" in capsys.readouterr().out
     output = tmp_path / "findings.csv"
     write_csv([finding], str(output))
-    assert output.read_text().splitlines()[0] == "kind,object_type,object_name,severity,property,message,targets,expected,actual,left,right"
+    assert (
+        output.read_text().splitlines()[0]
+        == "kind,object_type,object_name,severity,property,message,targets,expected,actual,left,right"
+    )

@@ -3,13 +3,13 @@
 ## Invocation
 
 ```text
-driftwatch [check|snapshot] --config PATH [--output PATH]
+driftwatch [check|compare|snapshot|explain|inspect|config validate|migration verify] [--config PATH] [--output PATH]
            [--format text|json|csv|sarif]
            [--strategy baseline|pairwise] [--baseline TARGET]
            [--policy PATH] [--fail-on info|warning|breaking|critical]
            [--workers N] [--connect-timeout SECONDS] [--query-timeout SECONDS]
            [--kind VALUE] [--severity VALUE] [--target VALUE]
-           [--object VALUE] [--query TEXT]
+           [--object VALUE] [--query TEXT] [--summary-only] [--quiet]
            [--username USER] [--password PASSWORD | --password-stdin]
 ```
 
@@ -77,6 +77,7 @@ the dimension filters.
 - `csv`: one row per selected finding with stable columns, including property,
   expected, and actual values. Complex values are JSON-encoded in their cells.
 - `sarif`: SARIF 2.1.0 results with stable Driftwatch fingerprints.
+- `html`: escaped, self-contained static report for human review.
 
 Findings use impact severities `info`, `warning`, `breaking`, and `critical`.
 Column, index, constraint, foreign-key, and object-definition differences are
@@ -97,6 +98,16 @@ identity, kind, and property rather than timestamps or values.
 - `0`: no findings, including when filters select none.
 - `2`: at least one finding meets the configured `--fail-on` threshold.
 - `1`: configuration, credential, or collection error.
+
+`--previous REPORT.json` adds `NEW`, `EXISTING`, and `RESOLVED` lifecycle
+labels. `explain --report REPORT.json --fingerprint HASH` prints one finding;
+`inspect` prints the selected report subset. `config validate --config PATH`
+validates configuration without connecting to a database.
+
+`migration verify --before BEFORE.json --after AFTER.json` compares two
+controlled snapshots and accepts repeated `--expected-effect` identifiers.
+It returns `2` when an effect is unexpected or an expected effect is missing;
+it never applies SQL itself.
 
 Connection and collection failures are reported without including connection
 strings.

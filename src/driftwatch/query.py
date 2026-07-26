@@ -9,12 +9,7 @@ def _values(values: Iterable[str] | None) -> frozenset[str]:
     """Normalize repeated/comma-separated CLI values for case-insensitive matching."""
     if values is None:
         return frozenset()
-    return frozenset(
-        item.strip().casefold()
-        for value in values
-        for item in value.split(",")
-        if item.strip()
-    )
+    return frozenset(item.strip().casefold() for value in values for item in value.split(",") if item.strip())
 
 
 def select_findings(
@@ -38,9 +33,7 @@ def select_findings(
             continue
         if severity_values and finding.severity.casefold() not in severity_values:
             continue
-        if target_values and not target_values.intersection(
-            target.casefold() for target in finding.targets
-        ):
+        if target_values and not target_values.intersection(target.casefold() for target in finding.targets):
             continue
         if object_values and finding.object_name.casefold() not in object_values:
             continue

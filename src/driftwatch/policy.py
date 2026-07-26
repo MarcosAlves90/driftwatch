@@ -1,8 +1,8 @@
 """Declarative policy loading and post-diff evaluation."""
 
-from dataclasses import dataclass, replace
 import fnmatch
 import json
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -94,11 +94,7 @@ class Policy:
 
     def blocking(self, result: PolicyResult) -> list[Finding]:
         allowed = {finding.fingerprint for finding in result.allowed}
-        return [
-            finding
-            for finding in result.findings
-            if finding.fingerprint not in allowed and self.blocks(finding)
-        ]
+        return [finding for finding in result.findings if finding.fingerprint not in allowed and self.blocks(finding)]
 
 
 def _rules(raw: Any, field_name: str, *, with_severity: bool) -> tuple[PolicyRule, ...]:
@@ -159,9 +155,7 @@ def load_policy(path: str | Path | None) -> Policy:
     object_rules = _rules(object_rules_input, "object_rules", with_severity=True)
     ignore = _rules(raw.get("ignore"), "ignore", with_severity=False)
     allow = _rules(raw.get("allow"), "allow", with_severity=False)
-    if {
-        (rule.pattern, rule.kinds, rule.object_types) for rule in ignore
-    } & {
+    if {(rule.pattern, rule.kinds, rule.object_types) for rule in ignore} & {
         (rule.pattern, rule.kinds, rule.object_types) for rule in allow
     }:
         raise ValueError("policy ignore and allow rules conflict")
