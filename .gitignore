@@ -1,5 +1,20 @@
-.venv/
+# Python bytecode and test caches
 __pycache__/
-.pytest_cache/
 *.py[cod]
-reports/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Python packaging artifacts
+*.egg-info/
+build/
+dist/
+
+# Local environments and secrets
+.venv/
+venv/
+.env
+
+# macOS metadata
+.DS_Store

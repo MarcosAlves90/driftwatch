@@ -11,13 +11,16 @@ def compare(left: Inventory, right: Inventory) -> list[Finding]:
         object_type, object_name = key.split("|", 1)
         if lval is None:
             findings.append(Finding("missing_left", object_type, object_name, "warning",
-                                    f"object exists only in {right.target}", None, rval))
+                                    f"object exists only in {right.target}", None, rval,
+                                    (right.target,)))
         elif rval is None:
             findings.append(Finding("missing_right", object_type, object_name, "warning",
-                                    f"object exists only in {left.target}", lval, None))
+                                    f"object exists only in {left.target}", lval, None,
+                                    (left.target,)))
         elif lval != rval:
             findings.append(Finding("definition_mismatch", object_type, object_name, "warning",
-                                    "object definitions differ", lval, rval))
+                                    "object definitions differ", lval, rval,
+                                    (left.target, right.target)))
     return findings
 
 

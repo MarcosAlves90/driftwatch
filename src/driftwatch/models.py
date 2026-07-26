@@ -24,8 +24,10 @@ class Finding:
     message: str
     left: Any = None
     right: Any = None
+    targets: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {"kind": self.kind, "object_type": self.object_type,
                 "object_name": self.object_name, "severity": self.severity,
-                "message": self.message, "left": self.left, "right": self.right}
+                "message": self.message, "left": self.left, "right": self.right,
+                "targets": list(self.targets)}
