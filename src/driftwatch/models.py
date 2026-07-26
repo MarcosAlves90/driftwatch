@@ -99,6 +99,8 @@ class ObjectId:
     SEPARATOR: ClassVar[str] = "|"
 
     def __str__(self) -> str:
+        if self.type.upper() == "SCHEMA" and not self.subobject:
+            return f"{self.type}|{self.name}"
         base = f"{self.type}|{self.schema}.{self.name}"
         return f"{base}.{self.subobject}" if self.subobject else base
 
@@ -108,6 +110,8 @@ class ObjectId:
         if not separator:
             raise ValueError(f"invalid object identifier: {value!r}")
         parts = qualified.split(".")
+        if object_type.upper() == "SCHEMA" and len(parts) == 1 and parts[0]:
+            return cls(object_type, "", parts[0])
         if len(parts) < 2 or any(not part for part in parts[:2]):
             raise ValueError(f"invalid object identifier: {value!r}")
         return cls(object_type, parts[0], parts[1], ".".join(parts[2:]) or None)
@@ -302,6 +306,7 @@ class Finding:
     lifecycle: FindingLifecycle | None = None
     planned: bool | None = None
     impact: dict[str, Any] | None = None
+    rule: str | None = None
 
     @builtins.property
     def fingerprint(self) -> str:
@@ -334,4 +339,6 @@ class Finding:
             result["planned"] = self.planned
         if self.impact is not None:
             result["impact"] = self.impact
+        if self.rule is not None:
+            result["rule"] = self.rule
         return result

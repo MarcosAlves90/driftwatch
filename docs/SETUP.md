@@ -30,6 +30,13 @@ environment variables whenever they contain credentials:
 The configured ODBC driver must be installed on the host. Set the referenced
 environment variables before running the CLI.
 
+For Azure SQL token authentication, install the optional provider and set
+`"auth": "azure_default"` or `"auth": "managed_identity"` in the config:
+
+```bash
+pip install -e '.[azure]'
+```
+
 ## Run
 
 Use the default text output for investigation:

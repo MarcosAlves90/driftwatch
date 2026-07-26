@@ -36,7 +36,7 @@ All notable changes to this project are documented here.
   Identity token providers, and catalog coverage for sequences, triggers,
   user-defined types, temporal tables, and schemas.
 - Ruff, Mypy, pytest-cov, Hypothesis, golden-output guidance, and a Python
-  3.11–3.13 CI matrix.
+  3.11–3.14 CI matrix.
 
 ### Fixed
 
@@ -49,6 +49,9 @@ All notable changes to this project are documented here.
   before its ordered columns are merged.
 - Preserved legacy CLI/report behavior while adding the P2 command contracts;
   SQL Server Docker key import is now non-interactive as well.
+- Added policy-aware migration effects, typed module dependency edges, distinct
+  inconclusive exit code `3`, full migration renderers, and GitHub Action
+  outputs for every supported report format.
 
 ### Removed
 

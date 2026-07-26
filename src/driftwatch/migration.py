@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Callable, Iterable
 
 from .diff import compare
-from .models import Finding
+from .models import Finding, Inventory, Severity
 
 
 @dataclass(frozen=True)
@@ -19,17 +19,39 @@ class MigrationEffect:
 @dataclass(frozen=True)
 class MigrationReport:
     effects: tuple[MigrationEffect, ...]
-    expected: tuple[str, ...] = ()
+    expected: tuple[str | Finding, ...] = ()
 
     @property
     def unexpected(self) -> tuple[MigrationEffect, ...]:
         return tuple(item for item in self.effects if item.classification == "unexpected")
 
     @property
-    def missing(self) -> tuple[str, ...]:
+    def missing(self) -> tuple[str | Finding, ...]:
         return tuple(
             item for item in self.expected if not any(_matches(item, effect.finding) for effect in self.effects)
         )
+
+    @property
+    def findings(self) -> list[Finding]:
+        """Return policy-ready findings while preserving effect classification."""
+        from dataclasses import replace
+
+        result = [replace(effect.finding, planned=effect.classification == "expected") for effect in self.effects]
+        result.extend(
+            Finding(
+                kind="migration_expected_missing",
+                object_type="MIGRATION",
+                object_name=_spec_text(spec),
+                severity=Severity.BREAKING.value,
+                message=f"expected migration effect did not occur: {spec}",
+                property="expected_effect",
+                expected=_spec_text(spec),
+                actual=None,
+                planned=False,
+            )
+            for spec in self.missing
+        )
+        return result
 
     def as_dict(self) -> dict:
         return {
@@ -38,12 +60,31 @@ class MigrationReport:
             "removed": [x.as_dict() for x in self.effects if x.finding.kind.startswith("missing_left")],
             "changed": [x.as_dict() for x in self.effects if x.finding.kind not in {"missing_left", "missing_right"}],
             "unexpected": [x.as_dict() for x in self.unexpected],
-            "missing_expected": list(self.missing),
+            "missing_expected": [_spec_text(item) for item in self.missing],
+            "findings": [item.as_dict() for item in self.findings],
         }
 
 
+def render_migration_text(report: MigrationReport) -> str:
+    lines = [
+        f"Migration effects: {len(report.effects)}",
+        f"Expected: {sum(item.classification == 'expected' for item in report.effects)}",
+        f"Unexpected: {len(report.unexpected)}",
+        f"Missing expected: {len(report.missing)}",
+    ]
+    for effect in report.effects:
+        finding = effect.finding
+        lines.append(
+            f"- {effect.classification} [{finding.severity}]: "
+            f"{finding.kind} {finding.object_type}|{finding.object_name}"
+        )
+    for missing in report.missing:
+        lines.append(f"- missing: {missing}")
+    return "\n".join(lines) + "\n"
+
+
 def verify_migration(
-    before, after, apply: Callable[[], None] | None = None, expected: Iterable[str] = ()
+    before, after, apply: Callable[[], None] | None = None, expected: Iterable[str | Finding] = ()
 ) -> MigrationReport:
     """Diff two controlled snapshots; `apply` is accepted for orchestration layers.
 
@@ -61,21 +102,54 @@ def verify_migration(
     return MigrationReport(effects, expected_set)
 
 
-def _matches(spec: str, finding: Finding) -> bool:
-    return spec in {
-        finding.fingerprint,
-        finding.kind,
-        finding.object_name,
-        f"{finding.kind}:{finding.object_name}",
-        f"{finding.kind}:{finding.object_name}:{finding.property or ''}",
+def _matches(spec: str | Finding, finding: Finding) -> bool:
+    if isinstance(spec, Finding):
+        return spec.fingerprint == finding.fingerprint
+    normalized = spec.casefold()
+    candidates = {
+        finding.fingerprint.casefold(),
+        finding.kind.casefold(),
+        finding.object_name.casefold(),
+        f"{finding.kind}:{finding.object_name}".casefold(),
+        f"{finding.kind}:{finding.object_name}:{finding.property or ''}".casefold(),
     }
+    if normalized in candidates:
+        return True
+    operation, separator, object_name = normalized.partition(" ")
+    return (
+        separator == " "
+        and object_name == finding.object_name.casefold()
+        and {
+            "add": "missing_right",
+            "create": "missing_right",
+            "drop": "missing_left",
+            "remove": "missing_left",
+            "change": finding.kind,
+            "alter": finding.kind,
+        }.get(operation)
+        == finding.kind.casefold()
+    )
+
+
+def _spec_text(spec: str | Finding) -> str:
+    return spec if isinstance(spec, str) else spec.fingerprint
 
 
 def run_migration_verification(
-    capture: Callable[[], object], apply: Callable[[], None], expected: Iterable[str] = ()
+    capture: Callable[[], Inventory],
+    apply: Callable[[], None],
+    expected: Iterable[str | Finding] = (),
+    before_path: str | None = None,
+    after_path: str | None = None,
 ) -> MigrationReport:
     """Capture, apply, and capture again in a caller-controlled environment."""
+    from .snapshot import write_snapshot
+
     before = capture()
+    if before_path:
+        write_snapshot(before, before_path)
     apply()
     after = capture()
+    if after_path:
+        write_snapshot(after, after_path)
     return verify_migration(before, after, expected=expected)

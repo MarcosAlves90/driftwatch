@@ -67,8 +67,14 @@ def impact_for_finding(finding: Finding, graph: DependencyGraph, depth: int = 3)
         node = ObjectId.parse(f"{finding.object_type}|{finding.object_name}")
     except ValueError:
         return {"direct_dependents": 0, "indirect_dependents": 0, "blast_radius": 0, "affected_objects": []}
-    direct = graph.dependents(node, 1)
-    all_dependents = graph.dependents(node, max(1, depth))
+    candidates = [node]
+    if node.type in {"COLUMN", "INDEX", "CONSTRAINT"}:
+        candidates.append(ObjectId("TABLE", node.schema, node.name))
+    direct: set[ObjectId] = set()
+    all_dependents: set[ObjectId] = set()
+    for candidate in candidates:
+        direct.update(graph.dependents(candidate, 1))
+        all_dependents.update(graph.dependents(candidate, max(1, depth)))
     return {
         "direct_dependents": len(direct),
         "indirect_dependents": max(0, len(all_dependents) - len(direct)),

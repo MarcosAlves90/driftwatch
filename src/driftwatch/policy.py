@@ -59,6 +59,14 @@ class Policy:
     strategy: ComparisonStrategy | None = None
     max_report_findings: int = 100
 
+    def rule_for(self, finding: Finding) -> str:
+        for rule in self.object_rules:
+            if rule.matches(finding) and rule.severity is not None:
+                return f"object:{rule.pattern}"
+        if finding.kind in (self.rules or {}):
+            return f"kind:{finding.kind}"
+        return "default"
+
     def severity_for(self, finding: Finding) -> Severity:
         for rule in self.object_rules:
             if rule.matches(finding) and rule.severity is not None:
@@ -75,8 +83,7 @@ class Policy:
         allowed_reasons: dict[str, str] = {}
         for finding in findings:
             severity = self.severity_for(finding)
-            if severity.value != finding.severity:
-                finding = replace(finding, severity=severity.value)
+            finding = replace(finding, severity=severity.value, rule=self.rule_for(finding))
             if any(rule.matches(finding) for rule in self.ignore):
                 ignored.append(finding)
             elif any(rule.matches(finding) for rule in self.allow):
@@ -94,7 +101,11 @@ class Policy:
 
     def blocking(self, result: PolicyResult) -> list[Finding]:
         allowed = {finding.fingerprint for finding in result.allowed}
-        return [finding for finding in result.findings if finding.fingerprint not in allowed and self.blocks(finding)]
+        return [
+            finding
+            for finding in result.findings
+            if finding.fingerprint not in allowed and finding.planned is not True and self.blocks(finding)
+        ]
 
 
 def _rules(raw: Any, field_name: str, *, with_severity: bool) -> tuple[PolicyRule, ...]:

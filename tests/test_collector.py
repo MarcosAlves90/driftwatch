@@ -1,5 +1,5 @@
 from driftwatch import collector
-from driftwatch.models import DatabaseTarget
+from driftwatch.models import DatabaseTarget, Inventory
 
 
 class CursorFixture:
@@ -55,7 +55,9 @@ def test_collect_redacts_password_from_connection_errors(monkeypatch):
 
     monkeypatch.setattr(collector, "_connect", fail)
     inventory = collector.collect(DatabaseTarget("fixture", "Driver=fixture"))
-    assert inventory.errors == [{"stage": "connect", "message": "PWD=[REDACTED]; server unavailable"}]
+    assert inventory.errors[0]["stage"] == "connect"
+    assert inventory.errors[0]["message"] == "PWD=[REDACTED]; server unavailable"
+    assert inventory.errors[0]["category"] == "connection"
 
 
 def test_collect_marks_failed_connection_and_sections(monkeypatch):
@@ -112,3 +114,13 @@ def test_collect_merges_unique_constraint_columns_into_existing_constraint(monke
     inventory = collector.collect(DatabaseTarget("fixture", "Driver=fixture"))
     assert inventory.errors == []
     assert inventory.objects["CONSTRAINT|dbo.Users.UQ_Users_Email"]["columns"] == ["email", "tenant_id"]
+
+
+def test_collect_records_typed_module_dependencies_when_catalog_exposes_them():
+    cursor = CursorFixture()
+    cursor.rows[collector.DEPENDENCY_QUERY] = [
+        ("dbo", "Users", "USER_TABLE", "dbo", "active_users", "VIEW"),
+    ]
+    inventory = Inventory("fixture")
+    collector._collect_objects(cursor, inventory)
+    assert inventory.objects["VIEW|dbo.active_users"]["dependencies"] == ["USER_TABLE|dbo.Users"]

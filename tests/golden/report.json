@@ -1,0 +1,44 @@
+{
+  "analysis": {
+    "by_kind": {
+      "definition_mismatch": 1
+    },
+    "by_object_type": {
+      "TABLE": 1
+    },
+    "by_severity": {
+      "warning": 1
+    },
+    "selected_count": 1
+  },
+  "collection_failures": [],
+  "execution": {
+    "timings": {}
+  },
+  "findings": [
+    {
+      "actual": null,
+      "expected": null,
+      "fingerprint": "a910329cf02b9d51139a429d28d36564ec4c6b75db2006fdb5d33ea7f24f466d",
+      "kind": "definition_mismatch",
+      "left": null,
+      "message": "changed",
+      "object_name": "dbo.Users",
+      "object_type": "TABLE",
+      "property": "definition",
+      "right": null,
+      "severity": "warning",
+      "targets": [
+        "dev",
+        "prod"
+      ]
+    }
+  ],
+  "format_version": 1,
+  "schema_version": 1,
+  "summary": {
+    "error_count": 0,
+    "finding_count": 1
+  },
+  "targets": []
+}

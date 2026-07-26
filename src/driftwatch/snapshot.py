@@ -31,6 +31,7 @@ def _payload(inventory: Inventory, origin: str | None = None) -> dict[str, Any]:
     unsigned = {
         "snapshot_version": SNAPSHOT_VERSION,
         "origin": {"name": origin or inventory.target},
+        "execution_id": hashlib.sha256(_canonical(structural).encode("utf-8")).hexdigest()[:16],
         "inventory": structural,
     }
     return {**unsigned, "digest": hashlib.sha256(_canonical(unsigned).encode("utf-8")).hexdigest()}
@@ -56,6 +57,10 @@ def _validate_payload(payload: Any) -> dict[str, Any]:
     if not isinstance(inventory, dict) or not isinstance(inventory.get("objects"), dict):
         raise ValueError("snapshot inventory.objects must be an object")
     unsigned = {key: payload[key] for key in ("snapshot_version", "origin", "inventory")}
+    if "execution_id" in payload:
+        if not isinstance(payload["execution_id"], str) or not payload["execution_id"]:
+            raise ValueError("snapshot execution_id must be a non-empty string")
+        unsigned["execution_id"] = payload["execution_id"]
     expected = hashlib.sha256(_canonical(unsigned).encode("utf-8")).hexdigest()
     if payload.get("digest") != expected:
         raise ValueError("snapshot digest is invalid")

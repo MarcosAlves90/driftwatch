@@ -109,9 +109,10 @@ printf '%s\n' "$DRIFTWATCH_PASSWORD" | driftwatch \
 `--password PASSWORD` is supported for automation but may be visible to other local users through the process list. CLI credentials override/add `UID` and `PWD` in memory and are never written to reports.
 
 Exit code `0` means no finding meets the configured threshold, `2` means at
-least one non-allowed finding meets `--fail-on` (default `warning`), and `1`
-means a configuration or collection error. Connection failures and partial
-sections appear in the report, and connection strings are never included.
+least one non-allowed finding meets `--fail-on` (default `warning`), `1` means
+a configuration or failed-collection error, and `3` means a partial,
+inconclusive collection. Connection failures and partial sections appear in
+the report, and connection strings are never included.
 
 ## Docker
 

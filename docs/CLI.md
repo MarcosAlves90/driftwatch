@@ -93,11 +93,16 @@ removing fields, or changing required types requires a new major schema
 version. Findings include a stable `fingerprint` derived from semantic
 identity, kind, and property rather than timestamps or values.
 
+Snapshots also carry a deterministic `execution_id` outside the structural
+inventory, allowing artifact history to identify the captured run without
+adding volatile timestamps to schema content.
+
 ## Exit codes
 
 - `0`: no findings, including when filters select none.
-- `2`: at least one finding meets the configured `--fail-on` threshold.
-- `1`: configuration, credential, or collection error.
+- `1`: configuration, credential, or failed collection error.
+- `2`: policy violation at or above `--fail-on`.
+- `3`: partial/inconclusive collection; no policy decision is claimed.
 
 `--previous REPORT.json` or `--previous SNAPSHOT.json` adds `NEW`, `EXISTING`,
 and `RESOLVED` lifecycle labels. `explain --report REPORT.json --fingerprint HASH` prints one finding;

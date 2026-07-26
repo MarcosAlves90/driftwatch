@@ -1,2 +1,2 @@
 kind,object_type,object_name,severity,property,message,targets,expected,actual,left,right
-definition_mismatch,VIEW,dbo.Users,warning,,definitions differ,"dev,prod",null,null,null,null
+definition_mismatch,TABLE,dbo.Users,warning,definition,changed,"dev,prod",null,null,null,null

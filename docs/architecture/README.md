@@ -15,9 +15,10 @@ The presentation layer is format-neutral: text, JSON, CSV, and SARIF all consume
 same selected findings. Aggregate analysis is computed from that same selection,
 so counts and details cannot describe different result sets.
 
-There is no persistent database, web service, queue, or migration writer. The
-tool operates in memory for one invocation; versioned schema snapshots provide
-the durable Git contract while historical aggregation remains outside scope.
+There is no persistent database, web service, queue, or implicit migration
+writer. The tool operates in memory for one invocation; versioned schema
+snapshots provide the durable Git contract, and controlled before/after
+snapshots provide migration effects and file-based lifecycle history.
 
 ```mermaid
 flowchart LR
@@ -27,6 +28,7 @@ flowchart LR
   Compare --> Select["Filter + search"]
   Policy["Versioned policy"] --> Select
   Select --> Analyze["Aggregate analysis"]
-  Select --> Render["Text / JSON / CSV / SARIF / GitHub"]
+  Select --> Analyze["Impact + lifecycle + policy"]
+  Analyze --> Render["Text / JSON / CSV / HTML / SARIF / GitHub"]
   Analyze --> Render
 ```

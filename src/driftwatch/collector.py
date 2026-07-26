@@ -152,7 +152,9 @@ FROM sys.types AS ty JOIN sys.schemas AS s ON s.schema_id = ty.schema_id
 JOIN sys.types AS base ON base.user_type_id = ty.system_type_id
 WHERE ty.is_user_defined = 1 ORDER BY s.name, ty.name
 """
-SCHEMA_QUERY = "SELECT name, principal_id FROM sys.schemas WHERE name NOT IN ('guest','sys','INFORMATION_SCHEMA','db_owner','db_accessadmin','db_securityadmin','db_ddladmin','db_backupoperator','db_datareader','db_datawriter','db_denydatareader','db_denydatawriter') ORDER BY name"
+SCHEMA_QUERY = (
+    "SELECT name, principal_id FROM sys.schemas WHERE name NOT IN ('guest','sys','INFORMATION_SCHEMA') ORDER BY name"
+)
 TEMPORAL_TABLE_QUERY = """
 SELECT s.name, t.name, t.temporal_type, hs.name, ht.name, t.history_retention_period
 FROM sys.tables AS t JOIN sys.schemas AS s ON s.schema_id=t.schema_id
@@ -161,7 +163,7 @@ LEFT JOIN sys.schemas AS hs ON hs.schema_id=ht.schema_id
 WHERE t.is_ms_shipped=0 AND t.temporal_type <> 0 ORDER BY s.name, t.name
 """
 DEPENDENCY_QUERY = """
-SELECT rs.name, ro.name, s.name, o.name
+SELECT rs.name, ro.name, ro.type_desc, s.name, o.name, o.type_desc
 FROM sys.sql_expression_dependencies AS d
 JOIN sys.objects AS ro ON ro.object_id = d.referenced_id
 JOIN sys.schemas AS rs ON rs.schema_id = ro.schema_id
@@ -189,6 +191,17 @@ def _safe_error(exc: Exception) -> str:
     return redact_secrets(str(exc))
 
 
+def _error_category(exc: Exception, stage: str) -> str:
+    text = str(exc).casefold()
+    if "timeout" in text or "timed out" in text:
+        return "timeout"
+    if any(term in text for term in ("permission", "denied", "not authorized", "access")):
+        return "permission"
+    if stage == "connect" or any(term in text for term in ("login", "connection", "server", "odbc")):
+        return "connection"
+    return "query"
+
+
 def _object_key(object_type: str, schema: str, name: str, subobject: str | None = None) -> str:
     return str(ObjectId(object_type, schema, name, subobject))
 
@@ -207,7 +220,12 @@ def _record_section_error(
     inventory: Inventory, section: CollectionSection, exc: Exception, started: float | None = None
 ) -> None:
     message = _safe_error(exc)
-    error = {"stage": section.value, "message": message, "error_type": type(exc).__name__}
+    error = {
+        "stage": section.value,
+        "message": message,
+        "error_type": type(exc).__name__,
+        "category": _error_category(exc, section.value),
+    }
     if started is not None:
         error["duration_seconds"] = f"{time.perf_counter() - started:.6f}"
     inventory.errors.append(error)
@@ -251,7 +269,9 @@ def collect(
         )
     except Exception as exc:
         message = _safe_error(exc)
-        inventory.errors.append({"stage": "connect", "message": message})
+        inventory.errors.append(
+            {"stage": "connect", "message": message, "error_type": type(exc).__name__, "category": "connection"}
+        )
         for section in CollectionSection:
             inventory.sections[section.value] = CollectionSectionStatus(CollectionStatus.FAILED, message)
         return inventory
@@ -283,7 +303,9 @@ def collect(
                         section_timings[section.value] = round(time.perf_counter() - section_started, 6)
     except Exception as exc:
         message = _safe_error(exc)
-        inventory.errors.append({"stage": "collect", "message": message})
+        inventory.errors.append(
+            {"stage": "collect", "message": message, "error_type": type(exc).__name__, "category": "query"}
+        )
         inventory.status = CollectionStatus.PARTIAL
     _finalize_status(inventory)
     inventory.metadata["timings"] = section_timings
@@ -312,7 +334,9 @@ def collect_many(
         except Exception as exc:
             inventory = _new_inventory(target.name)
             message = _safe_error(exc)
-            inventory.errors.append({"stage": "worker", "message": message})
+            inventory.errors.append(
+                {"stage": "worker", "message": message, "error_type": type(exc).__name__, "category": "query"}
+            )
             for section in CollectionSection:
                 inventory.sections[section.value] = CollectionSectionStatus(CollectionStatus.FAILED, message)
             return inventory
@@ -354,11 +378,11 @@ def _collect_objects(cursor: Any, inventory: Inventory) -> None:
         pass
     try:
         cursor.execute(DEPENDENCY_QUERY)
-        for referenced_schema, referenced_name, schema, name in cursor.fetchall():
-            dependent_key = _object_key("OBJECT", schema, name)
-            inventory.objects.setdefault(dependent_key, {"schema": schema, "name": name, "type": "OBJECT"})
+        for referenced_schema, referenced_name, referenced_type, schema, name, object_type in cursor.fetchall():
+            dependent_key = _object_key(object_type, schema, name)
+            inventory.objects.setdefault(dependent_key, {"schema": schema, "name": name, "type": object_type})
             inventory.objects[dependent_key].setdefault("dependencies", []).append(
-                _object_key("OBJECT", referenced_schema, referenced_name)
+                _object_key(referenced_type, referenced_schema, referenced_name)
             )
     except Exception:
         pass

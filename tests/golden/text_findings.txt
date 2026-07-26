@@ -1,0 +1,6 @@
+Findings: 1
+By severity: warning=1
+By kind: definition_mismatch=1
+By object type: TABLE=1
+
+[warning] definition_mismatch TABLE|dbo.Users: changed

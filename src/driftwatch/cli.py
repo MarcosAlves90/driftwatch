@@ -15,6 +15,19 @@ from .query import analyze_findings, select_findings
 from .report import build_report, render_html, render_sarif, render_text, write_csv, write_json
 from .snapshot import inventory_from_snapshot, write_snapshot
 
+EXIT_CLEAN = 0
+EXIT_RUNTIME = 1
+EXIT_POLICY = 2
+EXIT_INCONCLUSIVE = 3
+
+
+def _collection_exit(inventories: list[Inventory]) -> int:
+    if any(item.status == CollectionStatus.FAILED for item in inventories):
+        return EXIT_RUNTIME
+    if any(item.status == CollectionStatus.PARTIAL for item in inventories):
+        return EXIT_INCONCLUSIVE
+    return EXIT_CLEAN
+
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="driftwatch", description="Compare SQL Server schemas.")
@@ -152,16 +165,19 @@ def main(argv: list[str] | None = None) -> int:
                     or any(name.casefold() in item.get("object_name", "").casefold() for name in args.objects)
                 )
             ]
-            if not args.quiet:
-                print(
-                    json.dumps(
-                        selected
-                        if args.command == "explain"
-                        else {"summary": report.get("summary"), "findings": selected},
-                        indent=2,
-                        sort_keys=True,
-                    )
+            rendered = (
+                json.dumps(
+                    selected if args.command == "explain" else {"summary": report.get("summary"), "findings": selected},
+                    indent=2,
+                    sort_keys=True,
                 )
+                + "\n"
+            )
+            if args.output:
+                with open(args.output, "w", encoding="utf-8") as stream:
+                    stream.write(rendered)
+            elif not args.quiet:
+                print(rendered, end="")
             return 2 if selected and args.command == "explain" else 0
         if args.command == "config" and args.subcommand == "validate":
             if not args.config:
@@ -173,14 +189,37 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "migration" and args.subcommand == "verify":
             if not args.before_snapshot or not args.after_snapshot:
                 raise ValueError("migration verify requires --before and --after")
-            from .migration import verify_migration
+            from .migration import render_migration_text, verify_migration
 
             before = inventory_from_snapshot(args.before_snapshot)
             after = inventory_from_snapshot(args.after_snapshot)
             migration_report = verify_migration(before, after, expected=args.expected_effect or ())
-            if not args.quiet:
-                write_json(migration_report.as_dict(), args.output)
-            return 2 if migration_report.unexpected or migration_report.missing else 0
+            policy = _policy_from_args(args.policy, args.fail_on)
+            migration_evaluated = policy.evaluate(migration_report.findings)
+            if not args.quiet or args.output:
+                payload = migration_report.as_dict()
+                payload["policy"] = {"blocking_count": len(policy.blocking(migration_evaluated))}
+                payload["findings"] = [item.as_dict() for item in migration_evaluated.findings]
+                if args.format == "json":
+                    write_json(payload, args.output)
+                elif args.format == "text":
+                    rendered = render_migration_text(migration_report)
+                    if args.output:
+                        with open(args.output, "w", encoding="utf-8") as stream:
+                            stream.write(rendered)
+                    else:
+                        print(rendered, end="")
+                elif args.format == "html":
+                    from .report import render_html
+
+                    render_html(migration_report.findings, analyze_findings(migration_report.findings), args.output)
+                elif args.format == "csv":
+                    from .report import write_csv
+
+                    write_csv(migration_report.findings, args.output, enhanced=True)
+                else:
+                    render_sarif(migration_report.findings, args.output)
+            return EXIT_POLICY if policy.blocking(migration_evaluated) else EXIT_CLEAN
         if not args.config:
             raise ValueError("--config is required")
         if args.password_stdin:
@@ -228,7 +267,7 @@ def main(argv: list[str] | None = None) -> int:
             if not output:
                 raise ValueError("snapshot requires --snapshot-output or --output")
             write_snapshot(selected[0], output)
-            return 1 if selected[0].status != CollectionStatus.SUCCESS else 0
+            return _collection_exit(selected)
 
         collection_started = time.perf_counter()
         inventories = _collect_with_options(
@@ -310,7 +349,7 @@ def main(argv: list[str] | None = None) -> int:
         report["policy"]["blocking_count"] = len(policy.blocking(evaluated))
         if not args.summary_only:
             _emit_report(report, findings, args, inventories_for_report, strategy, baseline)
-        elif not args.quiet:
+        elif not args.quiet or args.output:
             if args.format == "text":
                 render_text(
                     [],
@@ -333,10 +372,11 @@ def main(argv: list[str] | None = None) -> int:
                     stream.write(job_summary(findings, tuple(item.target for item in inventories_for_report)))
         if args.github_annotations or os.getenv("GITHUB_ACTIONS") == "true":
             print(annotations(findings), end="")
-        if any(inventory.status != CollectionStatus.SUCCESS for inventory in inventories):
-            return 1
+        collection_exit = _collection_exit(inventories)
+        if collection_exit:
+            return collection_exit
         blocking = policy.blocking(evaluated)
-        return 2 if blocking else 0
+        return EXIT_POLICY if blocking else EXIT_CLEAN
     except (OSError, ValueError) as exc:
         print(f"driftwatch: {exc}", file=sys.stderr)
         return 1
