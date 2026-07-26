@@ -37,6 +37,18 @@ WHERE t.is_ms_shipped = 0
 ORDER BY s.name, t.name, c.column_id
 """
 
+COLUMN_QUERY_LEGACY = """
+SELECT s.name, t.name, c.name, ty.name, c.max_length, c.precision, c.scale,
+       c.is_nullable, dc.definition
+FROM sys.columns AS c
+JOIN sys.tables AS t ON t.object_id = c.object_id
+JOIN sys.schemas AS s ON s.schema_id = t.schema_id
+JOIN sys.types AS ty ON ty.user_type_id = c.user_type_id
+LEFT JOIN sys.default_constraints AS dc ON dc.object_id = c.default_object_id
+WHERE t.is_ms_shipped = 0
+ORDER BY s.name, t.name, c.column_id
+"""
+
 INDEX_QUERY = """
 SELECT s.name, t.name, i.name, i.type_desc, i.is_unique, i.is_primary_key,
        i.filter_definition, ic.index_column_id, ic.key_ordinal,
@@ -87,6 +99,15 @@ WHERE t.is_ms_shipped = 0
 ORDER BY s.name, t.name, cc.name
 """
 
+CHECK_CONSTRAINT_QUERY_LEGACY = """
+SELECT s.name, t.name, cc.name, NULL, cc.definition, cc.is_not_for_replication
+FROM sys.check_constraints AS cc
+JOIN sys.tables AS t ON t.object_id = cc.parent_object_id
+JOIN sys.schemas AS s ON s.schema_id = t.schema_id
+WHERE t.is_ms_shipped = 0
+ORDER BY s.name, t.name, cc.name
+"""
+
 UNIQUE_CONSTRAINT_QUERY = """
 SELECT s.name, t.name, kc.name, ic.key_ordinal, c.name
 FROM sys.key_constraints AS kc
@@ -97,6 +118,15 @@ JOIN sys.index_columns AS ic ON ic.object_id = kc.parent_object_id
 JOIN sys.columns AS c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
 WHERE kc.type = 'UQ' AND t.is_ms_shipped = 0
 ORDER BY s.name, t.name, kc.name, ic.key_ordinal
+"""
+
+UNIQUE_CONSTRAINT_QUERY_LEGACY = """
+SELECT s.name, t.name, kc.name, 1, NULL
+FROM sys.key_constraints AS kc
+JOIN sys.tables AS t ON t.object_id = kc.parent_object_id
+JOIN sys.schemas AS s ON s.schema_id = t.schema_id
+WHERE kc.type = 'UQ' AND t.is_ms_shipped = 0
+ORDER BY s.name, t.name, kc.name
 """
 
 DATABASE_METADATA_QUERY = "SELECT CAST(DATABASEPROPERTYEX(DB_NAME(), 'Collation') AS nvarchar(128))"
@@ -243,8 +273,16 @@ def _collect_objects(cursor: Any, inventory: Inventory) -> None:
 
 
 def _collect_columns(cursor: Any, inventory: Inventory) -> None:
-    cursor.execute(COLUMN_QUERY)
-    for row in cursor.fetchall():
+    try:
+        cursor.execute(COLUMN_QUERY)
+        rows = cursor.fetchall()
+    except Exception:
+        # Older SQL Server-compatible catalogs may not expose one of the
+        # enriched computed/identity columns. Preserve the P0 column contract
+        # and let the optional properties remain null in that environment.
+        cursor.execute(COLUMN_QUERY_LEGACY)
+        rows = cursor.fetchall()
+    for row in rows:
         if len(row) == 9:
             schema, table, name, data_type, max_length, precision, scale, nullable, default = row
             default_name = collation = is_computed = computed_definition = is_persisted = is_identity = seed = increment = None
@@ -363,30 +401,38 @@ def _collect_constraints(cursor: Any, inventory: Inventory) -> None:
         pass
     try:
         cursor.execute(CHECK_CONSTRAINT_QUERY)
-        for schema, table, name, column, expression, not_for_replication in cursor.fetchall():
-            key = _object_key("CONSTRAINT", schema, table, name)
-            inventory.objects[key] = {
-                "schema": schema,
-                "table": table,
-                "name": name,
-                "type": "CHECK_CONSTRAINT",
-                "column": column,
-                "expression": normalize_sql(expression),
-                "is_not_for_replication": bool(not_for_replication),
-            }
+        check_rows = cursor.fetchall()
     except KeyError:
-        pass
+        check_rows = []
+    except Exception:
+        cursor.execute(CHECK_CONSTRAINT_QUERY_LEGACY)
+        check_rows = cursor.fetchall()
+    for schema, table, name, column, expression, not_for_replication in check_rows:
+        key = _object_key("CONSTRAINT", schema, table, name)
+        inventory.objects[key] = {
+            "schema": schema,
+            "table": table,
+            "name": name,
+            "type": "CHECK_CONSTRAINT",
+            "column": column,
+            "expression": normalize_sql(expression),
+            "is_not_for_replication": bool(not_for_replication),
+        }
     try:
         cursor.execute(UNIQUE_CONSTRAINT_QUERY)
-        for schema, table, name, ordinal, column in cursor.fetchall():
-            key = _object_key("CONSTRAINT", schema, table, name)
-            item = inventory.objects.setdefault(
-                key,
-                {"schema": schema, "table": table, "name": name, "type": "UNIQUE_CONSTRAINT", "columns": []},
-            )
-            item["columns"].insert(max(0, ordinal - 1), column)
+        unique_rows = cursor.fetchall()
     except KeyError:
-        pass
+        unique_rows = []
+    except Exception:
+        cursor.execute(UNIQUE_CONSTRAINT_QUERY_LEGACY)
+        unique_rows = cursor.fetchall()
+    for schema, table, name, ordinal, column in unique_rows:
+        key = _object_key("CONSTRAINT", schema, table, name)
+        item = inventory.objects.setdefault(
+            key,
+            {"schema": schema, "table": table, "name": name, "type": "UNIQUE_CONSTRAINT", "columns": []},
+        )
+        item["columns"].insert(max(0, ordinal - 1), column)
 
 
 def _collect_database_metadata(cursor: Any, inventory: Inventory) -> None:
