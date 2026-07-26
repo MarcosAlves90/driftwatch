@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
+from driftwatch.azure_auth import SQL_COPT_SS_ACCESS_TOKEN, odbc_access_token_attributes
 from driftwatch.dependency import DependencyGraph, add_impact
 from driftwatch.diff import compare
-from driftwatch.azure_auth import SQL_COPT_SS_ACCESS_TOKEN, odbc_access_token_attributes
 from driftwatch.lifecycle import classify_findings
 from driftwatch.migration import verify_migration
 from driftwatch.models import Finding, Inventory, ObjectId
