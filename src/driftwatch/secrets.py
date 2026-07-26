@@ -8,8 +8,10 @@ _SECRET_KEYS = {
     "password": "password",
     "clientsecret": "client_secret",
     "client_secret": "client_secret",
+    "client secret": "client_secret",
     "accesstoken": "access_token",
     "access_token": "access_token",
+    "access token": "access_token",
     "token": "token",
 }
 _USERNAME_KEYS = {"uid", "user id", "userid", "username", "user"}
@@ -61,8 +63,14 @@ def split_connection_string(value: str) -> tuple[str, Credentials]:
     credentials = Credentials(
         username=next((values[key] for key in _USERNAME_KEYS if key in values), None),
         password=next((values[key] for key in ("pwd", "password") if key in values), None),
-        client_secret=next((values[key] for key in ("clientsecret", "client_secret") if key in values), None),
-        access_token=next((values[key] for key in ("accesstoken", "access_token") if key in values), None),
+        client_secret=next(
+            (values[key] for key in ("clientsecret", "client_secret", "client secret") if key in values),
+            None,
+        ),
+        access_token=next(
+            (values[key] for key in ("accesstoken", "access_token", "access token") if key in values),
+            None,
+        ),
         token=values.get("token"),
     )
     return ";".join(safe_segments), credentials
@@ -91,5 +99,8 @@ def append_credentials(base: str, credentials: Credentials) -> str:
 
 
 def redact_secrets(message: str) -> str:
-    pattern = r"(?i)(pwd|password|clientsecret|client_secret|accesstoken|access_token|token)\s*=\s*(\{[^}]*\}|[^;\s]*)"
+    pattern = (
+        r"(?i)\b(pwd|password|client[ _-]?secret|access[ _-]?token|token)"
+        r"\s*=\s*(\{(?:[^}]|}})*\}|[^;\s]*)"
+    )
     return re.sub(pattern, r"\1=[REDACTED]", message)

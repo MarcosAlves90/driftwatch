@@ -13,7 +13,7 @@ from driftwatch.models import (
     Inventory,
 )
 from driftwatch.report import build_report
-from driftwatch.secrets import redact_secrets
+from driftwatch.secrets import redact_secrets, split_connection_string
 from driftwatch.models import DatabaseTarget
 
 
@@ -150,13 +150,22 @@ def test_report_exposes_collection_status_without_connection_data():
 
 
 def test_secret_redaction_covers_multiple_driver_secret_names():
-    message = "ClientSecret=my-secret; AccessToken=abc123; Token=tkn; PWD=pass"
+    message = "Client Secret=my-secret; Access Token=abc123; Token=tkn; PWD={pa}}ss;word}"
     redacted = redact_secrets(message)
     assert "my-secret" not in redacted
     assert "abc123" not in redacted
     assert "tkn" not in redacted
-    assert "pass" not in redacted
+    assert "pa}}ss;word" not in redacted
     assert redacted.count("[REDACTED]") == 4
+
+
+def test_connection_parser_separates_spaced_secret_aliases():
+    base, credentials = split_connection_string(
+        "Server=db;Client Secret=client-value;Access Token=access-value"
+    )
+    assert base == "Server=db"
+    assert credentials.client_secret == "client-value"
+    assert credentials.access_token == "access-value"
 
 
 def test_database_target_repr_and_report_do_not_expose_connection_secrets():
