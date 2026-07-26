@@ -2,7 +2,7 @@ import json
 import os
 from pathlib import Path
 
-from .models import DatabaseTarget
+from .models import ComparisonStrategy, Credentials, DatabaseTarget
 
 
 def _resolve(value: str) -> str:
@@ -16,6 +16,22 @@ def _resolve(value: str) -> str:
 
 
 def load_targets(path: str | Path) -> list[DatabaseTarget]:
+    return load_config(path).targets
+
+
+class DriftConfig:
+    def __init__(
+        self,
+        targets: list[DatabaseTarget],
+        baseline: str | None = None,
+        strategy: ComparisonStrategy = ComparisonStrategy.PAIRWISE,
+    ) -> None:
+        self.targets = targets
+        self.baseline = baseline
+        self.strategy = strategy
+
+
+def load_config(path: str | Path) -> DriftConfig:
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     targets = raw.get("targets") if isinstance(raw, dict) else raw
     if not isinstance(targets, list) or len(targets) < 2:
@@ -25,7 +41,20 @@ def load_targets(path: str | Path) -> list[DatabaseTarget]:
         if not isinstance(item, dict) or not item.get("name") or not item.get("connection_string"):
             raise ValueError("each target needs name and connection_string")
         result.append(DatabaseTarget(item["name"], _resolve(item["connection_string"])))
-    return result
+    baseline = raw.get("baseline") if isinstance(raw, dict) else None
+    if baseline is not None and baseline not in {target.name for target in result}:
+        raise ValueError(f"baseline target {baseline!r} is not configured")
+    configured_strategy = raw.get("strategy") if isinstance(raw, dict) else None
+    if configured_strategy is None:
+        strategy = ComparisonStrategy.BASELINE if baseline else ComparisonStrategy.PAIRWISE
+    else:
+        try:
+            strategy = ComparisonStrategy(configured_strategy.casefold())
+        except (AttributeError, ValueError) as exc:
+            raise ValueError("strategy must be 'baseline' or 'pairwise'") from exc
+    if strategy == ComparisonStrategy.BASELINE and baseline is None:
+        raise ValueError("baseline strategy requires a baseline target")
+    return DriftConfig(result, baseline, strategy)
 
 
 def _odbc_value(value: str) -> str:
@@ -42,5 +71,5 @@ def apply_cli_credentials(
         return targets
     if not username or password is None:
         raise ValueError("--username and a password source must be provided together")
-    suffix = f";UID={_odbc_value(username)};PWD={_odbc_value(password)}"
-    return [DatabaseTarget(target.name, target.connection_string + suffix) for target in targets]
+    credentials = Credentials(username=username, password=password)
+    return [DatabaseTarget(target.name, target.connection.with_credentials(credentials)) for target in targets]

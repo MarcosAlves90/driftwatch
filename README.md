@@ -22,6 +22,19 @@ Filters can be repeated or comma-separated. They combine across dimensions;
 values within one option are alternatives. Available options are
 `--kind`, `--severity`, `--target`, `--object`, and `--query`.
 
+For multiple environments, choose an explicit comparison strategy and
+reference target:
+
+```bash
+driftwatch --config examples/config.json \
+  --strategy baseline --baseline prod
+```
+
+`baseline` compares every other target with the reference. `pairwise` compares
+every combination. A failed or partial collection is reported as an
+operational problem and its invalid sections are never interpreted as schema
+drift.
+
 Choose an output format explicitly when integrating with another tool:
 
 ```bash
@@ -31,8 +44,11 @@ driftwatch --config examples/config.json --format csv --output findings.csv
 ```
 
 The summary includes totals grouped by severity, finding kind, and object
-type. JSON retains the existing report fields and adds analysis metadata;
-filtered JSON contains only the selected findings.
+type. Semantic findings include the changed property, expected value, actual
+value, and impact severity (`info`, `warning`, `breaking`, or `critical`). JSON
+retains the existing report fields and adds analysis, comparison, collection
+status, and semantic metadata; filtered JSON contains only the selected
+findings.
 
 The configuration file is JSON. Use `env:VARIABLE_NAME` to keep credentials out of the file:
 
@@ -58,7 +74,7 @@ printf '%s\n' "$DRIFTWATCH_PASSWORD" | driftwatch \
 
 `--password PASSWORD` is supported for automation but may be visible to other local users through the process list. CLI credentials override/add `UID` and `PWD` in memory and are never written to reports.
 
-Exit code `0` means no findings, `2` means differences/anomalies were found, and `1` means a configuration error. Connection or collection failures appear in the report and connection strings are never included.
+Exit code `0` means no findings or collection problems, `2` means differences/anomalies were found, and `1` means a configuration or collection error. Connection failures and partial sections appear in the report, and connection strings are never included.
 
 ## Docker
 

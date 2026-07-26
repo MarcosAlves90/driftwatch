@@ -28,4 +28,4 @@ def test_text_output_is_compact_and_csv_has_stable_columns(tmp_path, capsys):
     assert "definitions differ" in capsys.readouterr().out
     output = tmp_path / "findings.csv"
     write_csv([finding], str(output))
-    assert output.read_text().splitlines()[0] == "kind,object_type,object_name,severity,message,targets,left,right"
+    assert output.read_text().splitlines()[0] == "kind,object_type,object_name,severity,property,message,targets,expected,actual,left,right"

@@ -56,3 +56,40 @@ def test_collect_redacts_password_from_connection_errors(monkeypatch):
     monkeypatch.setattr(collector, "_connect", fail)
     inventory = collector.collect(DatabaseTarget("fixture", "Driver=fixture"))
     assert inventory.errors == [{"stage": "connect", "message": "PWD=[REDACTED]; server unavailable"}]
+
+
+def test_collect_marks_failed_connection_and_sections(monkeypatch):
+    monkeypatch.setattr(collector, "_connect", lambda _: (_ for _ in ()).throw(RuntimeError("server down")))
+    inventory = collector.collect(DatabaseTarget("fixture", "Driver=fixture"))
+    assert inventory.status.value == "FAILED"
+    assert {section.status.value for section in inventory.sections.values()} == {"FAILED"}
+
+
+def test_collect_preserves_complete_index_and_foreign_key_properties(monkeypatch):
+    class RichCursor(CursorFixture):
+        def __init__(self):
+            super().__init__()
+            self.rows[collector.INDEX_QUERY] = [
+                ("dbo", "Users", "IX_Users", "NONCLUSTERED", 1, 0, "[active] = 1", 1, 1, 0, "tenant_id"),
+                ("dbo", "Users", "IX_Users", "NONCLUSTERED", 1, 0, "[active] = 1", 2, 2, 0, "email"),
+                ("dbo", "Users", "IX_Users", "NONCLUSTERED", 1, 0, "[active] = 1", 3, 0, 1, "name"),
+            ]
+            self.rows[collector.FOREIGN_KEY_QUERY] = [
+                ("dbo", "Orders", "FK_Orders_Users", "dbo", "Users", "user_id", "id", 1, "NO_ACTION", "CASCADE"),
+            ]
+
+    class RichConnection(ConnectionFixture):
+        def __init__(self):
+            self.cursor_fixture = RichCursor()
+
+    monkeypatch.setattr(collector, "_connect", lambda _: RichConnection())
+    inventory = collector.collect(DatabaseTarget("fixture", "Driver=fixture"))
+    assert inventory.status.value == "SUCCESS"
+    index = inventory.objects["INDEX|dbo.Users.IX_Users"]
+    assert index["key_columns"] == ["tenant_id", "email"]
+    assert index["include_columns"] == ["name"]
+    assert index["filter"] == "[active] = 1"
+    foreign_key = inventory.objects["CONSTRAINT|dbo.Orders.FK_Orders_Users"]
+    assert foreign_key["local_columns"] == ["user_id"]
+    assert foreign_key["referenced_columns"] == ["id"]
+    assert foreign_key["on_update"] == "CASCADE"

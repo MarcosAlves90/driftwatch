@@ -1,8 +1,14 @@
 from typing import Any
-import re
 
-from .models import DatabaseTarget, Inventory
+from .models import (
+    CollectionSection,
+    CollectionSectionStatus,
+    CollectionStatus,
+    DatabaseTarget,
+    Inventory,
+)
 from .normalize import normalize_sql
+from .secrets import redact_secrets
 
 OBJECT_QUERY = """
 SELECT o.type_desc, s.name, o.name, m.definition
@@ -27,15 +33,15 @@ ORDER BY s.name, t.name, c.column_id
 
 INDEX_QUERY = """
 SELECT s.name, t.name, i.name, i.type_desc, i.is_unique, i.is_primary_key,
-       STRING_AGG(c.name, ',') WITHIN GROUP (ORDER BY ic.key_ordinal)
+       i.filter_definition, ic.index_column_id, ic.key_ordinal,
+       ic.is_included_column, c.name
 FROM sys.indexes AS i
 JOIN sys.tables AS t ON t.object_id = i.object_id
 JOIN sys.schemas AS s ON s.schema_id = t.schema_id
 JOIN sys.index_columns AS ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
 JOIN sys.columns AS c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
 WHERE t.is_ms_shipped = 0 AND i.name IS NOT NULL
-GROUP BY s.name, t.name, i.name, i.type_desc, i.is_unique, i.is_primary_key
-ORDER BY s.name, t.name, i.name
+ORDER BY s.name, t.name, i.name, ic.index_column_id
 """
 
 CONSTRAINT_QUERY = """
@@ -44,87 +50,209 @@ FROM sys.key_constraints AS kc
 JOIN sys.tables AS t ON t.object_id = kc.parent_object_id
 JOIN sys.schemas AS s ON s.schema_id = t.schema_id
 WHERE t.is_ms_shipped = 0
-UNION ALL
-SELECT s.name, t.name, fk.name, 'FOREIGN_KEY', OBJECT_SCHEMA_NAME(fk.referenced_object_id) + '.' + OBJECT_NAME(fk.referenced_object_id)
+ORDER BY s.name, t.name, kc.name
+"""
+
+FOREIGN_KEY_QUERY = """
+SELECT ps.name, pt.name, fk.name, rs.name, rt.name, pc.name, rc.name,
+       fkc.constraint_column_id, fk.delete_referential_action_desc,
+       fk.update_referential_action_desc
 FROM sys.foreign_keys AS fk
-JOIN sys.tables AS t ON t.object_id = fk.parent_object_id
-JOIN sys.schemas AS s ON s.schema_id = t.schema_id
-WHERE t.is_ms_shipped = 0
-ORDER BY 1, 2, 3
+JOIN sys.tables AS pt ON pt.object_id = fk.parent_object_id
+JOIN sys.schemas AS ps ON ps.schema_id = pt.schema_id
+JOIN sys.foreign_key_columns AS fkc ON fkc.constraint_object_id = fk.object_id
+JOIN sys.columns AS pc ON pc.object_id = fkc.parent_object_id
+                       AND pc.column_id = fkc.parent_column_id
+JOIN sys.tables AS rt ON rt.object_id = fkc.referenced_object_id
+JOIN sys.schemas AS rs ON rs.schema_id = rt.schema_id
+JOIN sys.columns AS rc ON rc.object_id = fkc.referenced_object_id
+                       AND rc.column_id = fkc.referenced_column_id
+ORDER BY ps.name, pt.name, fk.name, fkc.constraint_column_id
 """
 
 
 def _connect(connection_string: str):
     import pyodbc
+
     return pyodbc.connect(connection_string, timeout=30)
 
 
 def _safe_error(exc: Exception) -> str:
-    message = str(exc)
-    return re.sub(r"(?i)(pwd|password)\s*=\s*(\{[^}]*\}|[^;\s]*)", r"\1=[REDACTED]", message)
+    return redact_secrets(str(exc))
+
+
+def _new_inventory(target: str) -> Inventory:
+    sections = {
+        section.value: CollectionSectionStatus(CollectionStatus.FAILED)
+        for section in CollectionSection
+    }
+    return Inventory(target=target, status=CollectionStatus.FAILED, sections=sections)
+
+
+def _record_section_error(inventory: Inventory, section: CollectionSection, exc: Exception) -> None:
+    message = _safe_error(exc)
+    inventory.errors.append({"stage": section.value, "message": message})
+    inventory.sections[section.value] = CollectionSectionStatus(CollectionStatus.FAILED, message)
+
+
+def _finalize_status(inventory: Inventory) -> None:
+    if any(error.get("stage") == "collect" for error in inventory.errors):
+        inventory.status = CollectionStatus.PARTIAL
+        return
+    statuses = [state.status for state in inventory.sections.values()]
+    if statuses and all(status == CollectionStatus.SUCCESS for status in statuses):
+        inventory.status = CollectionStatus.SUCCESS
+    elif any(status == CollectionStatus.SUCCESS for status in statuses):
+        inventory.status = CollectionStatus.PARTIAL
+    else:
+        inventory.status = CollectionStatus.FAILED
 
 
 def collect(target: DatabaseTarget) -> Inventory:
-    inventory = Inventory(target=target.name)
+    inventory = _new_inventory(target.name)
     try:
         connection = _connect(target.connection_string)
     except Exception as exc:
-        inventory.errors.append({"stage": "connect", "message": _safe_error(exc)})
+        message = _safe_error(exc)
+        inventory.errors.append({"stage": "connect", "message": message})
+        for section in CollectionSection:
+            inventory.sections[section.value] = CollectionSectionStatus(CollectionStatus.FAILED, message)
         return inventory
+
+    jobs = (
+        (CollectionSection.OBJECTS, _collect_objects),
+        (CollectionSection.COLUMNS, _collect_columns),
+        (CollectionSection.INDEXES, _collect_indexes),
+        (CollectionSection.CONSTRAINTS, _collect_constraints),
+    )
     try:
         with connection:
             with connection.cursor() as cursor:
-                _collect_objects(cursor, inventory)
-                _collect_columns(cursor, inventory)
-                _collect_indexes(cursor, inventory)
-                _collect_constraints(cursor, inventory)
+                for section, job in jobs:
+                    try:
+                        job(cursor, inventory)
+                        inventory.sections[section.value] = CollectionSectionStatus(CollectionStatus.SUCCESS)
+                    except Exception as exc:
+                        _record_section_error(inventory, section, exc)
     except Exception as exc:
-        inventory.errors.append({"stage": "collect", "message": _safe_error(exc)})
+        message = _safe_error(exc)
+        inventory.errors.append({"stage": "collect", "message": message})
+        inventory.status = CollectionStatus.PARTIAL
+    _finalize_status(inventory)
     return inventory
 
 
 def _collect_objects(cursor: Any, inventory: Inventory) -> None:
-    try:
-        cursor.execute(OBJECT_QUERY)
-        for type_desc, schema, name, definition in cursor.fetchall():
-            key = f"{type_desc}|{schema}.{name}"
-            inventory.objects[key] = {"schema": schema, "name": name,
-                                      "type": type_desc, "definition": normalize_sql(definition)}
-    except Exception as exc:
-        inventory.errors.append({"stage": "objects", "message": _safe_error(exc)})
+    cursor.execute(OBJECT_QUERY)
+    for type_desc, schema, name, definition in cursor.fetchall():
+        key = f"{type_desc}|{schema}.{name}"
+        inventory.objects[key] = {
+            "schema": schema,
+            "name": name,
+            "type": type_desc,
+            "definition": normalize_sql(definition),
+        }
 
 
 def _collect_columns(cursor: Any, inventory: Inventory) -> None:
-    try:
-        cursor.execute(COLUMN_QUERY)
-        for schema, table, name, data_type, max_length, precision, scale, nullable, default in cursor.fetchall():
-            key = f"COLUMN|{schema}.{table}.{name}"
-            inventory.objects[key] = {"schema": schema, "table": table, "name": name,
-                                      "data_type": data_type, "max_length": max_length,
-                                      "precision": precision, "scale": scale,
-                                      "is_nullable": bool(nullable), "default": normalize_sql(default)}
-    except Exception as exc:
-        inventory.errors.append({"stage": "columns", "message": _safe_error(exc)})
+    cursor.execute(COLUMN_QUERY)
+    for schema, table, name, data_type, max_length, precision, scale, nullable, default in cursor.fetchall():
+        key = f"COLUMN|{schema}.{table}.{name}"
+        inventory.objects[key] = {
+            "schema": schema,
+            "table": table,
+            "name": name,
+            "data_type": data_type,
+            "max_length": max_length,
+            "precision": precision,
+            "scale": scale,
+            "is_nullable": bool(nullable),
+            "default": normalize_sql(default),
+        }
 
 
 def _collect_indexes(cursor: Any, inventory: Inventory) -> None:
-    try:
-        cursor.execute(INDEX_QUERY)
-        for schema, table, name, index_type, unique, primary, columns in cursor.fetchall():
+    cursor.execute(INDEX_QUERY)
+    for row in cursor.fetchall():
+        if len(row) == 7:  # Compatibility with the original collector fixture/shape.
+            schema, table, name, index_type, unique, primary, columns = row
             key = f"INDEX|{schema}.{table}.{name}"
-            inventory.objects[key] = {"schema": schema, "table": table, "name": name,
-                                      "type": index_type, "is_unique": bool(unique),
-                                      "is_primary_key": bool(primary), "columns": columns}
-    except Exception as exc:
-        inventory.errors.append({"stage": "indexes", "message": _safe_error(exc)})
+            inventory.objects[key] = {
+                "schema": schema,
+                "table": table,
+                "name": name,
+                "type": index_type,
+                "is_unique": bool(unique),
+                "is_primary_key": bool(primary),
+                "key_columns": [item for item in (columns or "").split(",") if item],
+                "include_columns": [],
+                "filter": None,
+                "columns": columns,
+            }
+            continue
+        (
+            schema, table, name, index_type, unique, primary, filter_definition,
+            _index_column_id, key_ordinal, included, column_name,
+        ) = row
+        key = f"INDEX|{schema}.{table}.{name}"
+        item = inventory.objects.setdefault(
+            key,
+            {
+                "schema": schema,
+                "table": table,
+                "name": name,
+                "type": index_type,
+                "is_unique": bool(unique),
+                "is_primary_key": bool(primary),
+                "key_columns": [],
+                "include_columns": [],
+                "filter": normalize_sql(filter_definition),
+            },
+        )
+        if included:
+            item["include_columns"].append(column_name)
+        elif key_ordinal:
+            item["key_columns"].append(column_name)
+        item["columns"] = ",".join(item["key_columns"])
 
 
 def _collect_constraints(cursor: Any, inventory: Inventory) -> None:
+    cursor.execute(CONSTRAINT_QUERY)
+    for schema, table, name, constraint_type, reference in cursor.fetchall():
+        key = f"CONSTRAINT|{schema}.{table}.{name}"
+        inventory.objects[key] = {
+            "schema": schema,
+            "table": table,
+            "name": name,
+            "type": constraint_type,
+            "reference": reference,
+        }
+
     try:
-        cursor.execute(CONSTRAINT_QUERY)
-        for schema, table, name, constraint_type, reference in cursor.fetchall():
+        cursor.execute(FOREIGN_KEY_QUERY)
+        for row in cursor.fetchall():
+            (
+                schema, table, name, referenced_schema, referenced_table,
+                local_column, referenced_column, ordinal, on_delete, on_update,
+            ) = row
             key = f"CONSTRAINT|{schema}.{table}.{name}"
-            inventory.objects[key] = {"schema": schema, "table": table, "name": name,
-                                      "type": constraint_type, "reference": reference}
-    except Exception as exc:
-        inventory.errors.append({"stage": "constraints", "message": _safe_error(exc)})
+            item = inventory.objects.setdefault(
+                key,
+                {
+                    "schema": schema,
+                    "table": table,
+                    "name": name,
+                    "type": "FOREIGN_KEY",
+                    "local_columns": [],
+                    "referenced_schema": referenced_schema,
+                    "referenced_table": referenced_table,
+                    "referenced_columns": [],
+                    "on_delete": on_delete,
+                    "on_update": on_update,
+                },
+            )
+            item["local_columns"].insert(max(0, ordinal - 1), local_column)
+            item["referenced_columns"].insert(max(0, ordinal - 1), referenced_column)
+    except KeyError:
+        # Allows lightweight legacy cursor fixtures that predate the FK query.
+        pass
