@@ -27,3 +27,13 @@ All notable changes to this project are documented here.
   function metadata coverage.
 - SARIF output, GitHub summaries/annotations, stable report versions, and
   finding fingerprints.
+
+### Fixed
+
+- Made the GitHub Actions Microsoft key import non-interactive for headless
+  runners.
+- Seeded SQL Server integration tests in a dedicated database with separate
+  batches for tables and views.
+- Added compatibility fallbacks for legacy SQL Server catalog shapes.
+- Fixed UNIQUE constraint collection when the base constraint row is created
+  before its ordered columns are merged.

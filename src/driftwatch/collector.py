@@ -432,6 +432,7 @@ def _collect_constraints(cursor: Any, inventory: Inventory) -> None:
             key,
             {"schema": schema, "table": table, "name": name, "type": "UNIQUE_CONSTRAINT", "columns": []},
         )
+        item.setdefault("columns", [])
         item["columns"].insert(max(0, ordinal - 1), column)
 
 

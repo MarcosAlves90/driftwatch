@@ -93,3 +93,22 @@ def test_collect_preserves_complete_index_and_foreign_key_properties(monkeypatch
     assert foreign_key["local_columns"] == ["user_id"]
     assert foreign_key["referenced_columns"] == ["id"]
     assert foreign_key["on_update"] == "CASCADE"
+
+
+def test_collect_merges_unique_constraint_columns_into_existing_constraint(monkeypatch):
+    class UniqueCursor(CursorFixture):
+        def __init__(self):
+            super().__init__()
+            self.rows[collector.UNIQUE_CONSTRAINT_QUERY] = [
+                ("dbo", "Users", "UQ_Users_Email", 1, "email"),
+                ("dbo", "Users", "UQ_Users_Email", 2, "tenant_id"),
+            ]
+
+    class UniqueConnection(ConnectionFixture):
+        def __init__(self):
+            self.cursor_fixture = UniqueCursor()
+
+    monkeypatch.setattr(collector, "_connect", lambda _: UniqueConnection())
+    inventory = collector.collect(DatabaseTarget("fixture", "Driver=fixture"))
+    assert inventory.errors == []
+    assert inventory.objects["CONSTRAINT|dbo.Users.UQ_Users_Email"]["columns"] == ["email", "tenant_id"]
