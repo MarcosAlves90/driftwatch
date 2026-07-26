@@ -79,6 +79,13 @@ class ColumnDiffer:
         "scale": "column_scale_changed",
         "is_nullable": "column_nullability_changed",
         "default": "column_default_changed",
+        "default_constraint_name": "default_constraint_name_changed",
+        "collation": "column_collation_changed",
+        "computed_expression": "computed_expression_changed",
+        "is_persisted": "computed_persistence_changed",
+        "is_identity": "identity_property_changed",
+        "identity_seed": "identity_seed_changed",
+        "identity_increment": "identity_increment_changed",
     }
 
     def diff(self, object_type, object_name, expected, actual, targets):
@@ -142,7 +149,18 @@ class ConstraintDiffer:
     }
 
     def diff(self, object_type, object_name, expected, actual, targets):
-        properties = self._foreign_key_properties if expected.get("type") == "FOREIGN_KEY" or actual.get("type") == "FOREIGN_KEY" else {"type": "constraint_type_changed", "reference": "constraint_reference_changed"}
+        if expected.get("type") == "FOREIGN_KEY" or actual.get("type") == "FOREIGN_KEY":
+            properties = self._foreign_key_properties
+        elif expected.get("type") == "CHECK_CONSTRAINT" or actual.get("type") == "CHECK_CONSTRAINT":
+            properties = {
+                "expression": "check_expression_changed",
+                "column": "check_column_changed",
+                "is_not_for_replication": "check_replication_flag_changed",
+            }
+        elif expected.get("type") == "UNIQUE_CONSTRAINT" or actual.get("type") == "UNIQUE_CONSTRAINT":
+            properties = {"columns": "unique_constraint_columns_changed"}
+        else:
+            properties = {"type": "constraint_type_changed", "reference": "constraint_reference_changed"}
         findings = []
         for property_name, kind in properties.items():
             before, after = expected.get(property_name), actual.get(property_name)
@@ -164,9 +182,16 @@ class ConstraintDiffer:
 
 class ObjectDefinitionDiffer:
     def diff(self, object_type, object_name, expected, actual, targets):
+        finding_kind = {
+            "VIEW": "view_definition_changed",
+            "SQL_STORED_PROCEDURE": "stored_procedure_definition_changed",
+            "SQL_SCALAR_FUNCTION": "function_definition_changed",
+            "SQL_TABLE_VALUED_FUNCTION": "function_definition_changed",
+            "SQL_INLINE_TABLE_VALUED_FUNCTION": "function_definition_changed",
+        }.get(object_type, "definition_mismatch")
         return [
             Finding(
-                kind="definition_mismatch",
+                kind=finding_kind,
                 object_type=object_type,
                 object_name=object_name,
                 severity=severity_for("definition_mismatch", object_type),

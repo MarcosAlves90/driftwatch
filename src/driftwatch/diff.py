@@ -58,6 +58,29 @@ def compare(left: Inventory, right: Inventory) -> list[Finding]:
     _validate_comparable(left)
     _validate_comparable(right)
     findings: list[Finding] = []
+    left_collation = left.metadata.get("database_collation")
+    right_collation = right.metadata.get("database_collation")
+    if (
+        left.section_is_valid(CollectionSection.DATABASE)
+        and right.section_is_valid(CollectionSection.DATABASE)
+        and left_collation != right_collation
+        and (left_collation is not None or right_collation is not None)
+    ):
+        findings.append(
+            Finding(
+                kind="database_collation_changed",
+                object_type="DATABASE",
+                object_name="__database__",
+                severity="breaking",
+                message=f"database collation changed from {left_collation!r} to {right_collation!r}",
+                left=left_collation,
+                right=right_collation,
+                targets=(left.target, right.target),
+                property="collation",
+                expected=left_collation,
+                actual=right_collation,
+            )
+        )
     keys = sorted(set(left.objects) | set(right.objects))
     for key in keys:
         object_type, object_name = key.split("|", 1)

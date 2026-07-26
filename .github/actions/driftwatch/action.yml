@@ -1,0 +1,73 @@
+name: Driftwatch schema check
+description: Compare SQL Server schema targets with policy-aware CI outputs
+inputs:
+  config:
+    description: Path to the Driftwatch target configuration
+    required: true
+  policy:
+    description: Optional path to a versioned Driftwatch policy
+    required: false
+  format:
+    description: Output format (text, json, csv, or sarif)
+    required: false
+    default: sarif
+  fail-on:
+    description: Minimum severity that fails the step
+    required: false
+    default: warning
+  workers:
+    description: Maximum parallel target collections
+    required: false
+    default: '4'
+outputs:
+  finding_count:
+    description: Number of findings in the report
+    value: ${{ steps.report.outputs.finding_count }}
+  blocking_count:
+    description: Number of findings at or above fail-on
+    value: ${{ steps.report.outputs.blocking_count }}
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      run: python -m pip install .
+    - id: report
+      shell: bash
+      env:
+        DRIFTWATCH_CONFIG: ${{ inputs.config }}
+        DRIFTWATCH_POLICY: ${{ inputs.policy }}
+        DRIFTWATCH_FORMAT: ${{ inputs.format }}
+        DRIFTWATCH_FAIL_ON: ${{ inputs.fail-on }}
+        DRIFTWATCH_WORKERS: ${{ inputs.workers }}
+      run: |
+        set -o pipefail
+        args=(--config "$DRIFTWATCH_CONFIG" --format "$DRIFTWATCH_FORMAT" --fail-on "$DRIFTWATCH_FAIL_ON" --workers "$DRIFTWATCH_WORKERS")
+        if [[ -n "$DRIFTWATCH_POLICY" ]]; then args+=(--policy "$DRIFTWATCH_POLICY"); fi
+        status=0
+        if [[ "$DRIFTWATCH_FORMAT" == "sarif" ]]; then
+          set +e
+          driftwatch "${args[@]}" --output driftwatch.sarif
+          status=$?
+          set -e
+          python - <<'PY'
+        import json, os
+        report=json.load(open("driftwatch.sarif", encoding="utf-8"))
+        results=report["runs"][0].get("results", [])
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+            output.write(f"finding_count={len(results)}\n")
+            output.write(f"blocking_count={sum(item.get('level') == 'error' for item in results)}\n")
+        PY
+        else
+          set +e
+          driftwatch "${args[@]}" --output driftwatch-report
+          status=$?
+          set -e
+        fi
+        exit "$status"
+    - name: Upload report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: driftwatch-report
+        path: driftwatch*

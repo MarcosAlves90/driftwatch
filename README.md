@@ -43,6 +43,28 @@ driftwatch --config examples/config.json --format json --output report.json
 driftwatch --config examples/config.json --format csv --output findings.csv
 ```
 
+For CI, policy files control severity, ignores, and explicit exceptions:
+
+```bash
+driftwatch check --config examples/config.json \
+  --policy examples/policy.json --fail-on breaking --workers 4
+```
+
+Create a deterministic schema snapshot for Git review, then compare a live
+configuration against it later:
+
+```bash
+driftwatch snapshot --config examples/config.json --target prod \
+  --snapshot-output schemas/prod.json
+driftwatch check --config examples/config.json --snapshot schemas/prod.json \
+  --format sarif --fail-on breaking
+```
+
+Snapshots contain normalized schema metadata and a content digest, never
+connection strings or credentials. Their structural content is sorted so
+small schema changes produce focused Git diffs. A reusable composite action is
+available at `.github/actions/driftwatch/action.yml`.
+
 The summary includes totals grouped by severity, finding kind, and object
 type. Semantic findings include the changed property, expected value, actual
 value, and impact severity (`info`, `warning`, `breaking`, or `critical`). JSON
@@ -74,7 +96,10 @@ printf '%s\n' "$DRIFTWATCH_PASSWORD" | driftwatch \
 
 `--password PASSWORD` is supported for automation but may be visible to other local users through the process list. CLI credentials override/add `UID` and `PWD` in memory and are never written to reports.
 
-Exit code `0` means no findings or collection problems, `2` means differences/anomalies were found, and `1` means a configuration or collection error. Connection failures and partial sections appear in the report, and connection strings are never included.
+Exit code `0` means no finding meets the configured threshold, `2` means at
+least one non-allowed finding meets `--fail-on` (default `warning`), and `1`
+means a configuration or collection error. Connection failures and partial
+sections appear in the report, and connection strings are never included.
 
 ## Docker
 

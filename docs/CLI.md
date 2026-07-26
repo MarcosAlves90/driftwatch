@@ -3,8 +3,11 @@
 ## Invocation
 
 ```text
-driftwatch --config PATH [--output PATH] [--format text|json|csv]
+driftwatch [check|snapshot] --config PATH [--output PATH]
+           [--format text|json|csv|sarif]
            [--strategy baseline|pairwise] [--baseline TARGET]
+           [--policy PATH] [--fail-on info|warning|breaking|critical]
+           [--workers N] [--connect-timeout SECONDS] [--query-timeout SECONDS]
            [--kind VALUE] [--severity VALUE] [--target VALUE]
            [--object VALUE] [--query TEXT]
            [--username USER] [--password PASSWORD | --password-stdin]
@@ -16,6 +19,35 @@ the selected format to a file; without it, output goes to stdout.
 The JSON configuration may also contain `strategy` and `baseline` keys. CLI
 options override those values. Setting a baseline without a strategy selects
 the baseline strategy.
+
+The configuration can also contain `workers` (1–32), `connect_timeout`, and
+`query_timeout` in seconds. CLI values override the file. The default worker
+limit is 4 and the default connection timeout is 30 seconds.
+
+`snapshot` requires `--snapshot-output` (or `--output`) and exactly one target;
+use `--target` to select it from a multi-target config. `check --snapshot PATH`
+uses the snapshot as expected state and compares every configured live target
+against it.
+
+## Policy
+
+Policies are versioned JSON files. They can set `fail_on`, finding-kind
+severities, object-specific severity rules, exact/glob `ignore` patterns, and
+restricted `allow` exceptions:
+
+```json
+{
+  "version": 1,
+  "fail_on": "breaking",
+  "rules": {"index_removed": "warning"},
+  "ignore": ["dbo.__EFMigrationsHistory", "audit.*"],
+  "allow": [{"pattern": "dbo.temp_*", "kinds": ["missing_right"], "reason": "migration"}]
+}
+```
+
+Policy validation happens before collection. Ignored findings are excluded
+from blocking evaluation; allowed findings remain visible and are counted
+separately in JSON reports. Collection failures always return exit code 1.
 
 ## Collection reliability
 
@@ -44,16 +76,26 @@ the dimension filters.
   `findings` array contains only selected findings.
 - `csv`: one row per selected finding with stable columns, including property,
   expected, and actual values. Complex values are JSON-encoded in their cells.
+- `sarif`: SARIF 2.1.0 results with stable Driftwatch fingerprints.
 
 Findings use impact severities `info`, `warning`, `breaking`, and `critical`.
 Column, index, constraint, foreign-key, and object-definition differences are
 classified by specialized comparison logic rather than one generic dictionary
 comparison.
 
+## JSON compatibility
+
+Reports contain both `format_version` and `schema_version`, currently `1`.
+Consumers should ignore unknown fields and treat missing optional fields as
+absent. Adding optional fields is backward-compatible; changing field meaning,
+removing fields, or changing required types requires a new major schema
+version. Findings include a stable `fingerprint` derived from semantic
+identity, kind, and property rather than timestamps or values.
+
 ## Exit codes
 
 - `0`: no findings, including when filters select none.
-- `2`: at least one finding remains after filtering.
+- `2`: at least one finding meets the configured `--fail-on` threshold.
 - `1`: configuration, credential, or collection error.
 
 Connection and collection failures are reported without including connection

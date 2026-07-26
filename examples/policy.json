@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "fail_on": "breaking",
+  "rules": {
+    "index_removed": "warning",
+    "column_nullability_changed": "breaking"
+  },
+  "ignore": [
+    "dbo.__EFMigrationsHistory",
+    "audit.*"
+  ],
+  "allow": [
+    {
+      "pattern": "dbo.temp_*",
+      "kinds": ["missing_right"],
+      "reason": "temporary migration object"
+    }
+  ]
+}

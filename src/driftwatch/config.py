@@ -25,17 +25,23 @@ class DriftConfig:
         targets: list[DatabaseTarget],
         baseline: str | None = None,
         strategy: ComparisonStrategy = ComparisonStrategy.PAIRWISE,
+        workers: int = 4,
+        connect_timeout: int = 30,
+        query_timeout: int | None = None,
     ) -> None:
         self.targets = targets
         self.baseline = baseline
         self.strategy = strategy
+        self.workers = workers
+        self.connect_timeout = connect_timeout
+        self.query_timeout = query_timeout
 
 
-def load_config(path: str | Path) -> DriftConfig:
+def load_config(path: str | Path, *, min_targets: int = 2) -> DriftConfig:
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     targets = raw.get("targets") if isinstance(raw, dict) else raw
-    if not isinstance(targets, list) or len(targets) < 2:
-        raise ValueError("config must contain at least two targets")
+    if not isinstance(targets, list) or len(targets) < min_targets:
+        raise ValueError(f"config must contain at least {min_targets} target(s)")
     result = []
     for item in targets:
         if not isinstance(item, dict) or not item.get("name") or not item.get("connection_string"):
@@ -54,7 +60,16 @@ def load_config(path: str | Path) -> DriftConfig:
             raise ValueError("strategy must be 'baseline' or 'pairwise'") from exc
     if strategy == ComparisonStrategy.BASELINE and baseline is None:
         raise ValueError("baseline strategy requires a baseline target")
-    return DriftConfig(result, baseline, strategy)
+    workers = raw.get("workers", 4) if isinstance(raw, dict) else 4
+    connect_timeout = raw.get("connect_timeout", 30) if isinstance(raw, dict) else 30
+    query_timeout = raw.get("query_timeout") if isinstance(raw, dict) else None
+    if not isinstance(workers, int) or not 1 <= workers <= 32:
+        raise ValueError("workers must be an integer from 1 to 32")
+    if not isinstance(connect_timeout, int) or connect_timeout < 1:
+        raise ValueError("connect_timeout must be a positive integer")
+    if query_timeout is not None and (not isinstance(query_timeout, int) or query_timeout < 1):
+        raise ValueError("query_timeout must be a positive integer")
+    return DriftConfig(result, baseline, strategy, workers, connect_timeout, query_timeout)
 
 
 def _odbc_value(value: str) -> str:
