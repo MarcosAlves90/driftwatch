@@ -4,6 +4,7 @@ import pytest
 
 from driftwatch.dependency import DependencyGraph, add_impact
 from driftwatch.diff import compare
+from driftwatch.azure_auth import SQL_COPT_SS_ACCESS_TOKEN, odbc_access_token_attributes
 from driftwatch.lifecycle import classify_findings
 from driftwatch.migration import verify_migration
 from driftwatch.models import Finding, Inventory, ObjectId
@@ -55,6 +56,11 @@ def test_normalization_options_can_retain_comments_and_case():
     sql = "SELECT  1 -- note\n FROM dbo.Users"
     assert "note" in normalize_sql(sql, NormalizationOptions(ignore_comments=False))
     assert normalize_sql("SELECT 1", NormalizationOptions(normalize_keywords_case=False)) == "SELECT 1"
+
+
+def test_azure_token_uses_sql_server_odbc_attribute_encoding():
+    attributes = odbc_access_token_attributes("ab")
+    assert attributes[SQL_COPT_SS_ACCESS_TOKEN] == b"a\x00b\x00"
 
 
 def test_html_is_escaped_and_csv_can_be_enhanced(tmp_path):

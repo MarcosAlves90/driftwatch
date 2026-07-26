@@ -82,14 +82,15 @@ def _collect_with_options(
     connect_timeout: int,
     query_timeout: int | None,
     normalization: dict | None = None,
+    auth: str | None = None,
 ) -> list[Inventory]:
     settings_normalization = normalization or {}
 
     def target_collector(target: DatabaseTarget, *_args) -> Inventory:
-        if connect_timeout == 30 and query_timeout is None and not settings_normalization:
+        if connect_timeout == 30 and query_timeout is None and not settings_normalization and auth is None:
             # Keep the small public collector seam compatible with callers/tests.
             return collect(target)
-        return collect(target, connect_timeout, query_timeout, NormalizationOptions(**settings_normalization))
+        return collect(target, connect_timeout, query_timeout, NormalizationOptions(**settings_normalization), auth)
 
     return collect_many(
         targets,
@@ -213,7 +214,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "snapshot":
             inventories = _collect_with_options(
-                targets, workers, connect_timeout, query_timeout, settings.normalization
+                targets, workers, connect_timeout, query_timeout, settings.normalization, settings.auth
             )
             if args.target:
                 selected = [item for item in inventories if item.target in set(args.target)]
@@ -230,7 +231,9 @@ def main(argv: list[str] | None = None) -> int:
             return 1 if selected[0].status != CollectionStatus.SUCCESS else 0
 
         collection_started = time.perf_counter()
-        inventories = _collect_with_options(targets, workers, connect_timeout, query_timeout, settings.normalization)
+        inventories = _collect_with_options(
+            targets, workers, connect_timeout, query_timeout, settings.normalization, settings.auth
+        )
         collection_seconds = time.perf_counter() - collection_started
         comparison_started = time.perf_counter()
         if args.snapshot_path:

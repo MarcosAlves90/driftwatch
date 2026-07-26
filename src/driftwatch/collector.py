@@ -172,10 +172,17 @@ ORDER BY rs.name, ro.name, s.name, o.name
 """
 
 
-def _connect(connection_string: str, timeout: int = 30):
+def _connect(connection_string: str, timeout: int = 30, auth: str | None = None):
     import pyodbc
 
-    return pyodbc.connect(connection_string, timeout=timeout)
+    attrs_before = None
+    if auth in {"azure_default", "managed_identity"}:
+        from .azure_auth import access_token, odbc_access_token_attributes
+
+        attrs_before = odbc_access_token_attributes(access_token())
+    return pyodbc.connect(
+        connection_string, timeout=timeout, **({"attrs_before": attrs_before} if attrs_before else {})
+    )
 
 
 def _safe_error(exc: Exception) -> str:
@@ -225,6 +232,7 @@ def collect(
     connect_timeout: int = 30,
     query_timeout: int | None = None,
     normalization: NormalizationOptions | None = None,
+    auth: str | None = None,
 ) -> Inventory:
     if connect_timeout < 1:
         raise ValueError("connect_timeout must be positive")
@@ -236,8 +244,10 @@ def collect(
     try:
         connection = (
             _connect(target.connection_string)
+            if connect_timeout == 30 and auth is None
+            else _connect(target.connection_string, auth=auth)
             if connect_timeout == 30
-            else _connect(target.connection_string, timeout=connect_timeout)
+            else _connect(target.connection_string, timeout=connect_timeout, auth=auth)
         )
     except Exception as exc:
         message = _safe_error(exc)

@@ -2,6 +2,8 @@
 
 from typing import Any
 
+SQL_COPT_SS_ACCESS_TOKEN = 1256
+
 
 def default_credential() -> Any:
     try:
@@ -15,3 +17,9 @@ def access_token(scope: str = "https://database.windows.net//.default", credenti
     provider = credential or default_credential()
     token = provider.get_token(scope)
     return token.token
+
+
+def odbc_access_token_attributes(token: str) -> dict[int, bytes]:
+    """Encode an Azure bearer token for Microsoft's SQL Server ODBC driver."""
+    encoded = b"".join(bytes((byte, 0)) for byte in token.encode("utf-8"))
+    return {SQL_COPT_SS_ACCESS_TOKEN: encoded}
