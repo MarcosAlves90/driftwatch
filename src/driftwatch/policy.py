@@ -190,9 +190,12 @@ def _object_rules_input(raw: dict[str, Any]) -> Any:
     ]
 
 
+def _rule_identity(rule: PolicyRule) -> tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    return (rule.pattern, rule.kinds, rule.object_types, rule.targets)
+
+
 def _ensure_no_rule_conflicts(ignore: tuple[PolicyRule, ...], allow: tuple[PolicyRule, ...]) -> None:
-    identity = lambda rule: (rule.pattern, rule.kinds, rule.object_types, rule.targets)
-    if {identity(rule) for rule in ignore} & {identity(rule) for rule in allow}:
+    if {_rule_identity(rule) for rule in ignore} & {_rule_identity(rule) for rule in allow}:
         raise ValueError("policy ignore and allow rules conflict")
 
 
