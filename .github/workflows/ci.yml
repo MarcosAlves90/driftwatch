@@ -19,8 +19,7 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: pip install -e '.[dev]'
       - run: python -m compileall -q src tests
-      - run: pytest -q
-      - run: pytest --cov=driftwatch --cov-report=term-missing --cov-fail-under=55 -q
+      - run: pytest --cov=driftwatch --cov-report=term-missing --cov-fail-under=90 -q
 
   quality:
     runs-on: ubuntu-latest
@@ -75,4 +74,4 @@ jobs:
         env:
           DRIFTWATCH_TEST_CONN_A: 'Driver={ODBC Driver 18 for SQL Server};Server=localhost,1433;Database=driftwatch_ci;UID=sa;PWD=Driftwatch-CI-Password-123!;TrustServerCertificate=yes'
           DRIFTWATCH_TEST_CONN_B: 'Driver={ODBC Driver 18 for SQL Server};Server=localhost,1433;Database=driftwatch_ci;UID=sa;PWD=Driftwatch-CI-Password-123!;TrustServerCertificate=yes'
-        run: pytest -q tests/test_sqlserver_integration.py
+        run: pytest -q tests/test_sqlserver_integration.py tests/test_v2_sqlserver_integration.py

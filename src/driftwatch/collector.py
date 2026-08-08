@@ -1,5 +1,6 @@
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timezone
 from typing import Any, Callable
 
 from .models import (
@@ -9,16 +10,17 @@ from .models import (
     DatabaseTarget,
     Inventory,
     ObjectId,
+    canonical_object_type,
 )
 from .normalize import NormalizationOptions, normalize_sql
 from .secrets import redact_secrets
 
 OBJECT_QUERY = """
-SELECT o.type_desc, s.name, o.name, m.definition
+SELECT o.object_id, o.type_desc, s.name, o.name, m.definition, o.create_date, o.modify_date
 FROM sys.objects AS o
 JOIN sys.schemas AS s ON s.schema_id = o.schema_id
 LEFT JOIN sys.sql_modules AS m ON m.object_id = o.object_id
-WHERE o.is_ms_shipped = 0
+WHERE o.is_ms_shipped = 0 AND o.type IN ('U', 'V', 'P', 'FN', 'IF', 'TF')
 ORDER BY o.type_desc, s.name, o.name
 """
 
@@ -177,14 +179,12 @@ ORDER BY rs.name, ro.name, s.name, o.name
 def _connect(connection_string: str, timeout: int = 30, auth: str | None = None):
     import pyodbc
 
-    attrs_before = None
     if auth in {"azure_default", "managed_identity"}:
         from .azure_auth import access_token, odbc_access_token_attributes
 
         attrs_before = odbc_access_token_attributes(access_token())
-    return pyodbc.connect(
-        connection_string, timeout=timeout, **({"attrs_before": attrs_before} if attrs_before else {})
-    )
+        return pyodbc.connect(connection_string, timeout=timeout, attrs_before=attrs_before)
+    return pyodbc.connect(connection_string, timeout=timeout)
 
 
 def _safe_error(exc: Exception) -> str:
@@ -204,6 +204,33 @@ def _error_category(exc: Exception, stage: str) -> str:
 
 def _object_key(object_type: str, schema: str, name: str, subobject: str | None = None) -> str:
     return str(ObjectId(object_type, schema, name, subobject))
+
+
+def _iso_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return str(value)
+
+
+def _record_object_metadata(
+    inventory: Inventory,
+    key: str,
+    *,
+    raw_type: str,
+    object_id: Any = None,
+    created_at: Any = None,
+    modified_at: Any = None,
+) -> None:
+    metadata: dict[str, Any] = {"raw_type": raw_type}
+    if object_id is not None:
+        metadata["object_id"] = object_id
+    if created_at is not None:
+        metadata["created_at"] = _iso_value(created_at)
+    if modified_at is not None:
+        metadata["modified_at"] = _iso_value(modified_at)
+    inventory.object_metadata[key] = metadata
 
 
 def _normalize(inventory: Inventory, value: str | None) -> str | None:
@@ -236,13 +263,83 @@ def _finalize_status(inventory: Inventory) -> None:
     if any(error.get("stage") == "collect" for error in inventory.errors):
         inventory.status = CollectionStatus.PARTIAL
         return
-    statuses = [state.status for state in inventory.sections.values()]
+    required = (
+        CollectionSection.OBJECTS,
+        CollectionSection.COLUMNS,
+        CollectionSection.INDEXES,
+        CollectionSection.CONSTRAINTS,
+        CollectionSection.DATABASE,
+    )
+    statuses = [inventory.sections[section.value].status for section in required]
     if statuses and all(status == CollectionStatus.SUCCESS for status in statuses):
         inventory.status = CollectionStatus.SUCCESS
     elif any(status == CollectionStatus.SUCCESS for status in statuses):
         inventory.status = CollectionStatus.PARTIAL
     else:
         inventory.status = CollectionStatus.FAILED
+
+
+def _open_connection(target: DatabaseTarget, connect_timeout: int, auth: str | None):
+    if connect_timeout != 30:
+        return _connect(target.connection_string, timeout=connect_timeout, auth=auth)
+    if auth is not None:
+        return _connect(target.connection_string, auth=auth)
+    return _connect(target.connection_string)
+
+
+def _connection_failure(inventory: Inventory, exc: Exception) -> Inventory:
+    message = _safe_error(exc)
+    inventory.errors.append(
+        {"stage": "connect", "message": message, "error_type": type(exc).__name__, "category": "connection"}
+    )
+    for section in CollectionSection:
+        inventory.sections[section.value] = CollectionSectionStatus(CollectionStatus.FAILED, message)
+    return inventory
+
+
+def _configure_query_timeout(cursor: Any, query_timeout: int | None) -> None:
+    if query_timeout is None:
+        return
+    try:
+        setattr(cursor, "timeout", query_timeout)
+    except (AttributeError, TypeError):
+        pass
+
+
+def _run_collection_job(
+    cursor: Any,
+    inventory: Inventory,
+    section: CollectionSection,
+    job: Callable[[Any, Inventory], None],
+    timings: dict[str, float],
+) -> None:
+    started = time.perf_counter()
+    try:
+        job(cursor, inventory)
+        inventory.sections[section.value] = CollectionSectionStatus(CollectionStatus.SUCCESS)
+    except Exception as exc:
+        _record_section_error(inventory, section, exc, started)
+    finally:
+        timings[section.value] = round(time.perf_counter() - started, 6)
+
+
+def _collect_from_connection(
+    connection: Any, inventory: Inventory, query_timeout: int | None
+) -> dict[str, float]:
+    jobs = (
+        (CollectionSection.OBJECTS, _collect_objects),
+        (CollectionSection.COLUMNS, _collect_columns),
+        (CollectionSection.INDEXES, _collect_indexes),
+        (CollectionSection.CONSTRAINTS, _collect_constraints),
+        (CollectionSection.DATABASE, _collect_database_metadata),
+    )
+    timings: dict[str, float] = {}
+    with connection:
+        with connection.cursor() as cursor:
+            _configure_query_timeout(cursor, query_timeout)
+            for section, job in jobs:
+                _run_collection_job(cursor, inventory, section, job, timings)
+    return timings
 
 
 def collect(
@@ -257,56 +354,22 @@ def collect(
     if query_timeout is not None and query_timeout < 1:
         raise ValueError("query_timeout must be positive")
     inventory = _new_inventory(target.name)
+    inventory.observed_at = datetime.now(timezone.utc).isoformat()
     if normalization is not None:
         inventory.metadata["_normalization"] = normalization
     try:
-        connection = (
-            _connect(target.connection_string)
-            if connect_timeout == 30 and auth is None
-            else _connect(target.connection_string, auth=auth)
-            if connect_timeout == 30
-            else _connect(target.connection_string, timeout=connect_timeout, auth=auth)
-        )
+        connection = _open_connection(target, connect_timeout, auth)
     except Exception as exc:
-        message = _safe_error(exc)
-        inventory.errors.append(
-            {"stage": "connect", "message": message, "error_type": type(exc).__name__, "category": "connection"}
-        )
-        for section in CollectionSection:
-            inventory.sections[section.value] = CollectionSectionStatus(CollectionStatus.FAILED, message)
-        return inventory
-
-    jobs = (
-        (CollectionSection.OBJECTS, _collect_objects),
-        (CollectionSection.COLUMNS, _collect_columns),
-        (CollectionSection.INDEXES, _collect_indexes),
-        (CollectionSection.CONSTRAINTS, _collect_constraints),
-        (CollectionSection.DATABASE, _collect_database_metadata),
-    )
-    section_timings: dict[str, float] = {}
+        return _connection_failure(inventory, exc)
     try:
-        with connection:
-            with connection.cursor() as cursor:
-                if query_timeout is not None:
-                    try:
-                        cursor.timeout = query_timeout
-                    except (AttributeError, TypeError):
-                        pass
-                for section, job in jobs:
-                    section_started = time.perf_counter()
-                    try:
-                        job(cursor, inventory)
-                        section_timings[section.value] = round(time.perf_counter() - section_started, 6)
-                        inventory.sections[section.value] = CollectionSectionStatus(CollectionStatus.SUCCESS)
-                    except Exception as exc:
-                        _record_section_error(inventory, section, exc, section_started)
-                        section_timings[section.value] = round(time.perf_counter() - section_started, 6)
+        section_timings = _collect_from_connection(connection, inventory, query_timeout)
     except Exception as exc:
         message = _safe_error(exc)
         inventory.errors.append(
             {"stage": "collect", "message": message, "error_type": type(exc).__name__, "category": "query"}
         )
         inventory.status = CollectionStatus.PARTIAL
+        section_timings = {}
     _finalize_status(inventory)
     inventory.metadata["timings"] = section_timings
     return inventory
@@ -348,14 +411,28 @@ def collect_many(
 
 def _collect_objects(cursor: Any, inventory: Inventory) -> None:
     cursor.execute(OBJECT_QUERY)
-    for type_desc, schema, name, definition in cursor.fetchall():
-        key = _object_key(type_desc, schema, name)
+    for row in cursor.fetchall():
+        if len(row) == 4:  # compatibility with legacy fixtures and collectors
+            type_desc, schema, name, definition = row
+            object_id = created_at = modified_at = None
+        else:
+            object_id, type_desc, schema, name, definition, created_at, modified_at = row
+        canonical_type = canonical_object_type(type_desc)
+        key = _object_key(canonical_type, schema, name)
         inventory.objects[key] = {
             "schema": schema,
             "name": name,
-            "type": type_desc,
+            "type": canonical_type,
             "definition": _normalize(inventory, definition),
         }
+        _record_object_metadata(
+            inventory,
+            key,
+            raw_type=type_desc,
+            object_id=object_id,
+            created_at=created_at,
+            modified_at=modified_at,
+        )
     _collect_optional_catalog(cursor, inventory, SEQUENCE_QUERY, "SEQUENCE", _sequence_row)
     _collect_optional_catalog(cursor, inventory, TRIGGER_QUERY, "TRIGGER", _trigger_row)
     _collect_optional_catalog(cursor, inventory, UDT_QUERY, "USER_DEFINED_TYPE", _udt_row)
@@ -363,9 +440,8 @@ def _collect_objects(cursor: Any, inventory: Inventory) -> None:
     try:
         cursor.execute(TEMPORAL_TABLE_QUERY)
         for schema, name, temporal_type, history_schema, history_name, retention in cursor.fetchall():
-            item = inventory.objects.setdefault(
-                _object_key("TABLE", schema, name), {"schema": schema, "name": name, "type": "TABLE"}
-            )
+            key = _object_key("TABLE", schema, name)
+            item = inventory.objects.setdefault(key, {"schema": schema, "name": name, "type": "TABLE"})
             item.update(
                 {
                     "temporal_type": temporal_type,
@@ -380,12 +456,32 @@ def _collect_objects(cursor: Any, inventory: Inventory) -> None:
         cursor.execute(DEPENDENCY_QUERY)
         for referenced_schema, referenced_name, referenced_type, schema, name, object_type in cursor.fetchall():
             dependent_key = _object_key(object_type, schema, name)
-            inventory.objects.setdefault(dependent_key, {"schema": schema, "name": name, "type": object_type})
-            inventory.objects[dependent_key].setdefault("dependencies", []).append(
-                _object_key(referenced_type, referenced_schema, referenced_name)
+            dependency_key = _object_key(referenced_type, referenced_schema, referenced_name)
+            raw_dependency = f"{referenced_type}|{referenced_schema}.{referenced_name}"
+            inventory.objects.setdefault(
+                dependent_key,
+                {"schema": schema, "name": name, "type": canonical_object_type(object_type)},
             )
-    except Exception:
-        pass
+            # Compatibility mirror for callers that consumed dependencies from objects.
+            inventory.objects[dependent_key].setdefault("dependencies", []).append(raw_dependency)
+            inventory.dependencies.append(
+                {
+                    "dependency": dependency_key,
+                    "dependent": dependent_key,
+                    "source": "sql_expression_dependencies",
+                    "confidence": "catalog",
+                }
+            )
+        inventory.sections[CollectionSection.DEPENDENCIES.value] = CollectionSectionStatus(CollectionStatus.SUCCESS)
+        inventory.metadata["dependency_coverage"] = "partial"
+    except KeyError:
+        inventory.sections[CollectionSection.DEPENDENCIES.value] = CollectionSectionStatus(
+            CollectionStatus.FAILED, "dependency metadata unavailable"
+        )
+        inventory.metadata["dependency_coverage"] = "unavailable"
+    except Exception as exc:
+        _record_section_error(inventory, CollectionSection.DEPENDENCIES, exc)
+        inventory.metadata["dependency_coverage"] = "unavailable"
 
 
 def _collect_optional_catalog(cursor: Any, inventory: Inventory, query: str, object_type: str, mapper) -> None:

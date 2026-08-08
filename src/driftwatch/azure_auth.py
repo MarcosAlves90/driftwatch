@@ -1,5 +1,6 @@
 """Optional Azure token providers; importing driftwatch never requires azure-identity."""
 
+from collections.abc import Sequence
 from typing import Any
 
 SQL_COPT_SS_ACCESS_TOKEN = 1256
@@ -19,7 +20,9 @@ def access_token(scope: str = "https://database.windows.net//.default", credenti
     return token.token
 
 
-def odbc_access_token_attributes(token: str) -> dict[int, bytes]:
+def odbc_access_token_attributes(
+    token: str,
+) -> dict[int, int | bytes | bytearray | str | Sequence[str]]:
     """Encode an Azure bearer token for Microsoft's SQL Server ODBC driver."""
     encoded = b"".join(bytes((byte, 0)) for byte in token.encode("utf-8"))
     return {SQL_COPT_SS_ACCESS_TOKEN: encoded}

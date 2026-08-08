@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from typing import Any, Protocol
 
-from .models import Finding
+from .models import Finding, canonical_object_type
 
 
 class Differ(Protocol):
@@ -15,6 +15,28 @@ class Differ(Protocol):
     ) -> list[Finding]: ...
 
 
+def _missing_severity(object_type: str, missing_side: str) -> str:
+    if missing_side == "actual":
+        if object_type in {"table", "view"}:
+            return "critical"
+        if object_type in {"column", "constraint"}:
+            return "breaking"
+        return "warning"
+    return "info" if object_type == "column" else "warning"
+
+
+def _changed_severity(kind: str, object_type: str, property_name: str | None, expected: Any, actual: Any) -> str:
+    if property_name == "is_nullable" and expected is True and actual is False:
+        return "breaking"
+    if property_name == "max_length" and isinstance(expected, int) and isinstance(actual, int):
+        return "breaking" if actual < expected else "info"
+    if object_type in {"constraint", "foreign_key"}:
+        return "breaking"
+    if object_type == "table" and kind.endswith("removed"):
+        return "critical"
+    return "warning"
+
+
 def severity_for(
     kind: str,
     object_type: str,
@@ -24,26 +46,10 @@ def severity_for(
     *,
     missing_side: str | None = None,
 ) -> str:
-    object_type = object_type.casefold()
-    if missing_side == "actual":
-        if object_type in {"table", "view"}:
-            return "critical"
-        if object_type in {"column", "constraint"}:
-            return "breaking"
-        return "warning"
-    if missing_side == "expected":
-        if object_type == "column":
-            return "info"
-        return "warning"
-    if property_name in {"is_nullable"} and expected is True and actual is False:
-        return "breaking"
-    if property_name == "max_length" and isinstance(expected, int) and isinstance(actual, int):
-        return "breaking" if actual < expected else "info"
-    if object_type in {"constraint", "foreign_key"}:
-        return "breaking"
-    if object_type == "table" and kind.endswith("removed"):
-        return "critical"
-    return "warning"
+    canonical = canonical_object_type(object_type).casefold()
+    if missing_side is not None:
+        return _missing_severity(canonical, missing_side)
+    return _changed_severity(kind, canonical, property_name, expected, actual)
 
 
 def _finding(
@@ -168,7 +174,7 @@ class ConstraintDiffer:
                 findings.append(
                     _finding(
                         kind,
-                        "FOREIGN_KEY" if properties is self._foreign_key_properties else object_type,
+                        object_type,
                         object_name,
                         f"constraint property {property_name} changed from {before!r} to {after!r}",
                         before,
@@ -184,7 +190,9 @@ class ObjectDefinitionDiffer:
     def diff(self, object_type, object_name, expected, actual, targets):
         finding_kind = {
             "VIEW": "view_definition_changed",
+            "PROCEDURE": "stored_procedure_definition_changed",
             "SQL_STORED_PROCEDURE": "stored_procedure_definition_changed",
+            "FUNCTION": "function_definition_changed",
             "SQL_SCALAR_FUNCTION": "function_definition_changed",
             "SQL_TABLE_VALUED_FUNCTION": "function_definition_changed",
             "SQL_INLINE_TABLE_VALUED_FUNCTION": "function_definition_changed",

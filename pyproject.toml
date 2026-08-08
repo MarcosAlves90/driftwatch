@@ -37,3 +37,10 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["driftwatch"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true

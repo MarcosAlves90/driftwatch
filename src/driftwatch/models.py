@@ -6,6 +6,29 @@ from enum import StrEnum
 from typing import Any, ClassVar
 
 
+_OBJECT_TYPE_ALIASES = {
+    "USER_TABLE": "TABLE",
+    "TABLE": "TABLE",
+    "VIEW": "VIEW",
+    "SQL_STORED_PROCEDURE": "PROCEDURE",
+    "PROCEDURE": "PROCEDURE",
+    "SQL_SCALAR_FUNCTION": "FUNCTION",
+    "SQL_TABLE_VALUED_FUNCTION": "FUNCTION",
+    "SQL_INLINE_TABLE_VALUED_FUNCTION": "FUNCTION",
+    "FUNCTION": "FUNCTION",
+    "SQL_TRIGGER": "TRIGGER",
+    "TRIGGER": "TRIGGER",
+    "SEQUENCE_OBJECT": "SEQUENCE",
+    "SEQUENCE": "SEQUENCE",
+}
+
+
+def canonical_object_type(value: str) -> str:
+    """Return Driftwatch's stable object vocabulary for a SQL Server type."""
+    normalized = str(value).upper()
+    return _OBJECT_TYPE_ALIASES.get(normalized, normalized)
+
+
 class CollectionStatus(StrEnum):
     SUCCESS = "SUCCESS"
     PARTIAL = "PARTIAL"
@@ -18,6 +41,7 @@ class CollectionSection(StrEnum):
     INDEXES = "indexes"
     CONSTRAINTS = "constraints"
     DATABASE = "database"
+    DEPENDENCIES = "dependencies"
 
 
 class ComparisonStrategy(StrEnum):
@@ -98,10 +122,20 @@ class ObjectId:
 
     SEPARATOR: ClassVar[str] = "|"
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "type", canonical_object_type(self.type))
+
     def __str__(self) -> str:
-        if self.type.upper() == "SCHEMA" and not self.subobject:
+        if self.type == "SCHEMA" and not self.subobject:
             return f"{self.type}|{self.name}"
         base = f"{self.type}|{self.schema}.{self.name}"
+        return f"{base}.{self.subobject}" if self.subobject else base
+
+    @property
+    def qualified_name(self) -> str:
+        if self.type == "SCHEMA":
+            return self.name
+        base = f"{self.schema}.{self.name}"
         return f"{base}.{self.subobject}" if self.subobject else base
 
     @classmethod
@@ -110,7 +144,7 @@ class ObjectId:
         if not separator:
             raise ValueError(f"invalid object identifier: {value!r}")
         parts = qualified.split(".")
-        if object_type.upper() == "SCHEMA" and len(parts) == 1 and parts[0]:
+        if canonical_object_type(object_type) == "SCHEMA" and len(parts) == 1 and parts[0]:
             return cls(object_type, "", parts[0])
         if len(parts) < 2 or any(not part for part in parts[:2]):
             raise ValueError(f"invalid object identifier: {value!r}")
@@ -172,6 +206,7 @@ class ModuleDefinition:
 class FindingLifecycle(StrEnum):
     NEW = "NEW"
     EXISTING = "EXISTING"
+    CHANGED = "CHANGED"
     RESOLVED = "RESOLVED"
 
 
@@ -262,15 +297,18 @@ class Inventory:
     status: CollectionStatus = CollectionStatus.SUCCESS
     sections: dict[str, CollectionSectionStatus] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
+    object_metadata: dict[str, dict[str, Any]] = field(default_factory=dict)
+    dependencies: list[dict[str, Any]] = field(default_factory=list)
+    observed_at: str | None = None
 
     def section_is_valid(self, section: CollectionSection) -> bool:
         state = self.sections.get(section.value)
         return state is None or state.status == CollectionStatus.SUCCESS
 
-    def as_report(self) -> dict[str, Any]:
+    def as_report(self, *, include_inventory: bool = False) -> dict[str, Any]:
         from .secrets import redact_secrets
 
-        return {
+        report: dict[str, Any] = {
             "name": self.target,
             "status": self.status.value,
             "object_count": len(self.objects),
@@ -285,9 +323,21 @@ class Inventory:
             "metadata": {
                 key: self.metadata[key]
                 for key in sorted(self.metadata)
-                if key in {"database_collation", "schema_version", "snapshot_digest", "timings"}
+                if key in {"database_collation", "schema_version", "snapshot_digest", "timings", "dependency_coverage"}
             },
         }
+        if self.observed_at is not None:
+            report["observed_at"] = self.observed_at
+        if include_inventory:
+            report["inventory"] = {
+                "objects": {key: self.objects[key] for key in sorted(self.objects)},
+                "object_metadata": {key: self.object_metadata[key] for key in sorted(self.object_metadata)},
+                "dependencies": sorted(
+                    self.dependencies,
+                    key=lambda item: (str(item.get("dependency", "")), str(item.get("dependent", ""))),
+                ),
+            }
+        return report
 
 
 @dataclass(frozen=True)
@@ -307,18 +357,39 @@ class Finding:
     planned: bool | None = None
     impact: dict[str, Any] | None = None
     rule: str | None = None
+    comparison: tuple[str, str] | None = None
+    first_seen_at: str | None = None
+    last_seen_at: str | None = None
+    metadata: dict[str, Any] | None = None
+    stable_issue_key: str | None = None
 
     @builtins.property
     def fingerprint(self) -> str:
+        """Stable legacy issue identity retained for SARIF/report compatibility."""
         payload = {
             "kind": str(self.kind),
-            "object_type": self.object_type,
+            "object_type": canonical_object_type(self.object_type),
             "object_name": self.object_name,
             "property": self.property,
         }
         return hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
 
-    def as_dict(self) -> dict[str, Any]:
+    @builtins.property
+    def issue_key(self) -> str:
+        return self.stable_issue_key or self.fingerprint
+
+    @builtins.property
+    def occurrence_id(self) -> str:
+        payload = {
+            "issue_key": self.issue_key,
+            "comparison": list(self.comparison or ()),
+            "targets": list(self.targets),
+            "expected": self.expected if self.expected is not None else self.left,
+            "actual": self.actual if self.actual is not None else self.right,
+        }
+        return hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
+
+    def as_dict(self, *, enhanced: bool = False) -> dict[str, Any]:
         result = {
             "kind": self.kind,
             "object_type": self.object_type,
@@ -341,4 +412,18 @@ class Finding:
             result["impact"] = self.impact
         if self.rule is not None:
             result["rule"] = self.rule
+        if enhanced:
+            result.update(
+                {
+                    "issue_key": self.issue_key,
+                    "occurrence_id": self.occurrence_id,
+                    "comparison": list(self.comparison or ()),
+                }
+            )
+            if self.first_seen_at is not None:
+                result["first_seen_at"] = self.first_seen_at
+            if self.last_seen_at is not None:
+                result["last_seen_at"] = self.last_seen_at
+            if self.metadata is not None:
+                result["metadata"] = self.metadata
         return result
