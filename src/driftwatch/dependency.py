@@ -116,8 +116,7 @@ def dependency_coverage(inventory: Inventory) -> str:
 
 def add_impact(findings: list[Finding], graph: DependencyGraph, depth: int = 3) -> list[Finding]:
     return [
-        Finding(**{**finding.__dict__, "impact": impact_for_finding(finding, graph, depth)})
-        for finding in findings
+        Finding(**{**finding.__dict__, "impact": impact_for_finding(finding, graph, depth)}) for finding in findings
     ]
 
 

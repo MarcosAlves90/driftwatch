@@ -171,8 +171,12 @@ _MODULE_TYPES = {"VIEW", "PROCEDURE", "FUNCTION", "TRIGGER"}
 
 
 def _column_plan(
-    finding: Finding, identifier: ObjectId, desired_state: dict[str, Any] | None, desired: str | None,
-    precondition: tuple[str, ...], verification: tuple[str, ...]
+    finding: Finding,
+    identifier: ObjectId,
+    desired_state: dict[str, Any] | None,
+    desired: str | None,
+    precondition: tuple[str, ...],
+    verification: tuple[str, ...],
 ) -> RemediationPlan | None:
     if identifier.type != "COLUMN" or finding.property not in _COLUMN_PROPERTIES:
         return None
@@ -190,7 +194,11 @@ def _column_plan(
     )
     relaxation = finding.property == "is_nullable" and finding.expected is True
     risk = "low" if widening or relaxation else "high"
-    notes = () if risk == "low" else ("Narrowing, type conversion, collation, or NOT NULL changes can reject existing data.",)
+    notes = (
+        ()
+        if risk == "low"
+        else ("Narrowing, type conversion, collation, or NOT NULL changes can reject existing data.",)
+    )
     return RemediationPlan(
         status="AVAILABLE",
         confidence="high",
@@ -214,11 +222,14 @@ def _missing_index_plan(
     if sql is None:
         return None
     return RemediationPlan(
-        status="AVAILABLE", confidence="high", risk="low",
+        status="AVAILABLE",
+        confidence="high",
+        risk="low",
         reason="Recreate the missing index from the observed authoritative definition.",
         preconditions=precondition,
         steps=("Review index workload impact.", "Apply through the normal migration process."),
-        sql=(sql,), verification=verification,
+        sql=(sql,),
+        verification=verification,
     )
 
 
@@ -233,17 +244,24 @@ def _missing_constraint_plan(
         return None
     risk = "high" if state.get("type") == "FOREIGN_KEY" else "medium"
     return RemediationPlan(
-        status="AVAILABLE", confidence="high", risk=risk,
+        status="AVAILABLE",
+        confidence="high",
+        risk=risk,
         reason="Recreate the missing constraint from catalog evidence.",
         preconditions=precondition,
         steps=("Validate existing rows against the constraint.", "Apply through the normal migration process."),
-        sql=(sql,), verification=verification,
+        sql=(sql,),
+        verification=verification,
     )
 
 
 def _module_plan(
-    finding: Finding, identifier: ObjectId, desired_state: dict[str, Any] | None, desired: str | None,
-    precondition: tuple[str, ...], verification: tuple[str, ...]
+    finding: Finding,
+    identifier: ObjectId,
+    desired_state: dict[str, Any] | None,
+    desired: str | None,
+    precondition: tuple[str, ...],
+    verification: tuple[str, ...],
 ) -> RemediationPlan | None:
     if canonical_object_type(identifier.type) not in _MODULE_TYPES:
         return None
@@ -256,11 +274,14 @@ def _module_plan(
     if not sql.rstrip().endswith(";"):
         sql += ";"
     return RemediationPlan(
-        status="AVAILABLE", confidence="medium", risk="medium",
+        status="AVAILABLE",
+        confidence="medium",
+        risk="medium",
         reason=f"Restore the module definition observed on {desired or 'the reference target'}.",
         preconditions=precondition,
         steps=("Review the module definition and dependencies.", "Apply it through the normal migration process."),
-        sql=(sql,), verification=verification,
+        sql=(sql,),
+        verification=verification,
         manual_notes=("sys.sql_modules text should be reviewed before execution; Driftwatch does not execute it.",),
     )
 
@@ -281,7 +302,9 @@ def plan_for_finding(
         desired = desired_target
         actual_target = None
     desired_state = _object_state(inventories, desired, str(identifier)) if desired else None
-    precondition = (f"Confirm {actual_target or 'the target'} still matches the analyzed schema state before applying DDL.",)
+    precondition = (
+        f"Confirm {actual_target or 'the target'} still matches the analyzed schema state before applying DDL.",
+    )
     verification = ("Rerun Driftwatch against the same comparison and confirm this issue is RESOLVED.",)
     planners = (
         lambda: _column_plan(finding, identifier, desired_state, desired, precondition, verification),

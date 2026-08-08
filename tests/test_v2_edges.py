@@ -237,9 +237,7 @@ def test_collector_helpers_and_status_matrix():
     collector._finalize_status(inventory)
     assert inventory.status == CollectionStatus.SUCCESS
 
-    inventory.sections[CollectionSection.COLUMNS.value] = CollectionSectionStatus(
-        CollectionStatus.FAILED
-    )
+    inventory.sections[CollectionSection.COLUMNS.value] = CollectionSectionStatus(CollectionStatus.FAILED)
     collector._finalize_status(inventory)
     assert inventory.status == CollectionStatus.PARTIAL
 
@@ -345,9 +343,7 @@ def test_collect_objects_rich_catalog_temporal_dependencies_and_failure():
                 collector.TRIGGER_QUERY: [("dbo", "Users", "tr", 0, "CREATE TRIGGER tr")],
                 collector.UDT_QUERY: [("dbo", "code", "varchar", 20, 0, 0, 1)],
                 collector.SCHEMA_QUERY: [("app", 1)],
-                collector.TEMPORAL_TABLE_QUERY: [
-                    ("dbo", "Users", 2, "history", "UsersHistory", 30)
-                ],
+                collector.TEMPORAL_TABLE_QUERY: [("dbo", "Users", 2, "history", "UsersHistory", 30)],
                 collector.DEPENDENCY_QUERY: [
                     (
                         "dbo",
@@ -393,15 +389,9 @@ def test_collect_objects_rich_catalog_temporal_dependencies_and_failure():
 
 
 def test_collector_row_mappers_columns_and_constraint_fallbacks():
-    assert collector._sequence_row(("dbo", "s", "int", 1, 2, 0, 10, 1))[2][
-        "is_cycling"
-    ] is True
-    assert collector._trigger_row(("dbo", "T", "tr", 1, " SELECT 1 "))[2][
-        "is_disabled"
-    ] is True
-    assert collector._udt_row(("dbo", "u", "int", 4, 10, 0, 0))[2][
-        "is_nullable"
-    ] is False
+    assert collector._sequence_row(("dbo", "s", "int", 1, 2, 0, 10, 1))[2]["is_cycling"] is True
+    assert collector._trigger_row(("dbo", "T", "tr", 1, " SELECT 1 "))[2]["is_disabled"] is True
+    assert collector._udt_row(("dbo", "u", "int", 4, 10, 0, 0))[2]["is_nullable"] is False
     assert collector._schema_row(("app", 5)) == ("", "app", {"principal_id": 5})
 
     class Cursor:
@@ -420,17 +410,11 @@ def test_collector_row_mappers_columns_and_constraint_fallbacks():
 
         def fetchall(self):
             rows = {
-                collector.COLUMN_QUERY_LEGACY: [
-                    ("dbo", "T", "c", "varchar", 10, 0, 0, 1, "('x')")
-                ],
+                collector.COLUMN_QUERY_LEGACY: [("dbo", "T", "c", "varchar", 10, 0, 0, 1, "('x')")],
                 collector.CONSTRAINT_QUERY: [],
                 collector.FOREIGN_KEY_QUERY: [],
-                collector.CHECK_CONSTRAINT_QUERY_LEGACY: [
-                    ("dbo", "T", "CK", None, "x > 0", 0)
-                ],
-                collector.UNIQUE_CONSTRAINT_QUERY_LEGACY: [
-                    ("dbo", "T", "UQ", 1, None)
-                ],
+                collector.CHECK_CONSTRAINT_QUERY_LEGACY: [("dbo", "T", "CK", None, "x > 0", 0)],
+                collector.UNIQUE_CONSTRAINT_QUERY_LEGACY: [("dbo", "T", "UQ", 1, None)],
             }
             current = self.current
             return rows.get(current, []) if current is not None else []
@@ -458,9 +442,7 @@ def test_remediation_helper_matrix():
     assert _sql_type({}) is None
     assert _sql_type({"data_type": "nvarchar", "max_length": 20}) == "nvarchar(10)"
     assert _sql_type({"data_type": "nvarchar", "max_length": -1}) == "nvarchar(max)"
-    assert _sql_type(
-        {"data_type": "decimal", "precision": 10, "scale": 2}
-    ) == "decimal(10,2)"
+    assert _sql_type({"data_type": "decimal", "precision": 10, "scale": 2}) == "decimal(10,2)"
     assert _sql_type({"data_type": "int"}) == "int"
 
     column = ObjectId("COLUMN", "dbo", "T", "c")
@@ -597,12 +579,7 @@ def test_cli_compare_output_formats_summary_and_github(tmp_path, monkeypatch, ca
         assert code == 0
         assert output.stat().st_size > 0
 
-    assert (
-        cli.main(
-            ["check", "--config", str(config), "--summary-only", "--fail-on", "critical"]
-        )
-        == 0
-    )
+    assert cli.main(["check", "--config", str(config), "--summary-only", "--fail-on", "critical"]) == 0
     assert "Issues:" in capsys.readouterr().out
 
     summary = tmp_path / "summary.md"

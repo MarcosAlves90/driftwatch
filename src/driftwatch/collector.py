@@ -323,9 +323,7 @@ def _run_collection_job(
         timings[section.value] = round(time.perf_counter() - started, 6)
 
 
-def _collect_from_connection(
-    connection: Any, inventory: Inventory, query_timeout: int | None
-) -> dict[str, float]:
+def _collect_from_connection(connection: Any, inventory: Inventory, query_timeout: int | None) -> dict[str, float]:
     jobs = (
         (CollectionSection.OBJECTS, _collect_objects),
         (CollectionSection.COLUMNS, _collect_columns),

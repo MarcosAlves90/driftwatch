@@ -56,10 +56,7 @@ def _inv(
     return Inventory(
         name,
         objects or {},
-        sections={
-            section.value: CollectionSectionStatus(CollectionStatus.SUCCESS)
-            for section in CollectionSection
-        },
+        sections={section.value: CollectionSectionStatus(CollectionStatus.SUCCESS) for section in CollectionSection},
         metadata=metadata or {"dependency_coverage": "complete"},
         object_metadata=object_metadata or {},
         dependencies=deps or [],
@@ -155,18 +152,14 @@ def test_occurrence_identity_and_changed_lifecycle():
         "generated_at": "2026-08-06T00:00:00+00:00",
         "findings": [old.as_dict(enhanced=True)],
     }
-    classified = classify_findings(
-        [current], previous, observed_at="2026-08-07T00:00:00+00:00"
-    )
+    classified = classify_findings([current], previous, observed_at="2026-08-07T00:00:00+00:00")
     assert classified[0].lifecycle == FindingLifecycle.CHANGED
     assert classified[0].first_seen_at == "2026-08-06T00:00:00+00:00"
     resolved = classify_findings([], previous, observed_at="2026-08-08T00:00:00+00:00")
     assert resolved[0].lifecycle == FindingLifecycle.RESOLVED
     assert resolved[0].kind == old.kind
     assert resolved[0].issue_key == old.issue_key
-    assert Policy(fail_on=Severity.INFO).blocking(
-        Policy(fail_on=Severity.INFO).evaluate(resolved)
-    ) == []
+    assert Policy(fail_on=Severity.INFO).blocking(Policy(fail_on=Severity.INFO).evaluate(resolved)) == []
 
 
 def test_dependency_graph_target_impact_and_views_are_explicit():
@@ -196,12 +189,10 @@ def test_dependency_graph_target_impact_and_views_are_explicit():
     assert enriched.impact is not None
     assert enriched.impact["blast_radius"] == 1
     assert enriched.impact["by_target"]["prod"]["affected_objects"] == ["VIEW|dbo.v"]
-    assert dependency_view(prod, ObjectId("TABLE", "dbo", "Users"))["objects"] == [
-        "VIEW|dbo.v"
+    assert dependency_view(prod, ObjectId("TABLE", "dbo", "Users"))["objects"] == ["VIEW|dbo.v"]
+    assert dependency_view(prod, ObjectId("VIEW", "dbo", "v"), direction="dependencies")["objects"] == [
+        "TABLE|dbo.Users"
     ]
-    assert dependency_view(
-        prod, ObjectId("VIEW", "dbo", "v"), direction="dependencies"
-    )["objects"] == ["TABLE|dbo.Users"]
     assert graph_from_inventory(prod).as_dict()["TABLE|dbo.Users"] == ["VIEW|dbo.v"]
     assert dependency_coverage(Inventory("old")) == "unknown"
     users = ObjectId("TABLE", "dbo", "Users")
@@ -235,12 +226,8 @@ def test_evidence_and_date_dependency_filters():
     finding = add_target_impact(compare(prod, dev), [prod, dev])[0]
     finding = attach_evidence([finding], [prod, dev])[0]
     assert finding.metadata is not None
-    assert finding.metadata["by_target"]["prod"]["object"]["modified_at"].startswith(
-        "2026-08-01"
-    )
-    assert select_findings([finding], modified_after="2026-07-01T00:00:00+00:00") == [
-        finding
-    ]
+    assert finding.metadata["by_target"]["prod"]["object"]["modified_at"].startswith("2026-08-01")
+    assert select_findings([finding], modified_after="2026-07-01T00:00:00+00:00") == [finding]
     assert select_findings([finding], modified_before="2020-01-01T00:00:00+00:00") == []
     assert select_findings([finding], properties=["MAX_LENGTH"]) == [finding]
     assert select_findings([finding], issue_keys=[finding.issue_key]) == [finding]
@@ -445,12 +432,8 @@ def _enhanced_report():
             }
         },
     )
-    findings = attach_evidence(
-        add_target_impact(compare(prod, dev), [prod, dev]), [prod, dev]
-    )
-    findings = classify_findings(
-        findings, None, observed_at="2026-08-07T00:00:00+00:00"
-    )
+    findings = attach_evidence(add_target_impact(compare(prod, dev), [prod, dev]), [prod, dev])
+    findings = classify_findings(findings, None, observed_at="2026-08-07T00:00:00+00:00")
     issues = aggregate_issues(findings)
     analysis = {
         "selected_count": len(findings),
@@ -530,15 +513,11 @@ def test_cli_offline_inspect_explain_deps_plan_history(tmp_path, capsys):
 
 def test_cli_validation_snapshot_and_error_paths(tmp_path, monkeypatch, capsys):
     config = tmp_path / "config.json"
-    config.write_text(
-        json.dumps({"targets": [{"name": "prod", "connection_string": "fixture"}]})
-    )
+    config.write_text(json.dumps({"targets": [{"name": "prod", "connection_string": "fixture"}]}))
     assert cli.main(["config", "validate", "--config", str(config)]) == 0
     assert "configuration is valid" in capsys.readouterr().out
 
-    monkeypatch.setattr(
-        cli, "collect", lambda target: _inv(target.name, {"TABLE|dbo.Users": {}})
-    )
+    monkeypatch.setattr(cli, "collect", lambda target: _inv(target.name, {"TABLE|dbo.Users": {}}))
     snapshot = tmp_path / "snap.json"
     assert cli.main(["snapshot", "--config", str(config), "--output", str(snapshot)]) == 0
     assert snapshot.exists()

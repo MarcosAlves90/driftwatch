@@ -140,7 +140,9 @@ def _matching_object_keys(inventories: list[Inventory], object_query: str) -> li
 
 def _append_object_details(lines: list[str], key: str, inventories: list[Inventory]) -> None:
     lines.extend(["", key, "Targets"])
-    lines.extend(f"- {inventory.target}: {'present' if key in inventory.objects else 'missing'}" for inventory in inventories)
+    lines.extend(
+        f"- {inventory.target}: {'present' if key in inventory.objects else 'missing'}" for inventory in inventories
+    )
     lines.append("Metadata")
     metadata_lines = [
         f"- {inventory.target}: created={metadata.get('created_at') or 'unknown'}, "
@@ -346,9 +348,7 @@ def plan_report(report: dict[str, Any], key: str, *, desired_target: str | None 
             (item for item in findings if item.comparison and desired_target in item.comparison),
             selected,
         )
-    return render_remediation_text(
-        _plan_for_report(report, selected, desired_target=desired_target)
-    )
+    return render_remediation_text(_plan_for_report(report, selected, desired_target=desired_target))
 
 
 def history_report(current: dict[str, Any], previous: dict[str, Any] | None = None, key: str | None = None) -> str:

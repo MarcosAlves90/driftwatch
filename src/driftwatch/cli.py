@@ -455,7 +455,11 @@ def _compare_targets(args, runtime: _Runtime, inventories: list[Inventory]) -> t
 
 
 def _compare_runtime(args, runtime: _Runtime, inventories: list[Inventory]) -> tuple[list, list[Inventory]]:
-    return _compare_with_snapshot(args, inventories) if args.snapshot_path else _compare_targets(args, runtime, inventories)
+    return (
+        _compare_with_snapshot(args, inventories)
+        if args.snapshot_path
+        else _compare_targets(args, runtime, inventories)
+    )
 
 
 def _apply_lifecycle(args, findings: list, inventories: list[Inventory]) -> list:

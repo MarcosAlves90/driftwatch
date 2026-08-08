@@ -26,9 +26,7 @@ def _structural_inventory(inventory: Inventory, *, version: int = SNAPSHOT_VERSI
         },
     }
     if version >= 2:
-        result["object_metadata"] = {
-            key: inventory.object_metadata[key] for key in sorted(inventory.object_metadata)
-        }
+        result["object_metadata"] = {key: inventory.object_metadata[key] for key in sorted(inventory.object_metadata)}
         result["dependencies"] = sorted(
             inventory.dependencies,
             key=lambda item: (

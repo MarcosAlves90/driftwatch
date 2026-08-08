@@ -81,9 +81,7 @@ def _issue_lines(issues: Iterable[Issue]) -> list[str]:
     for issue in values:
         lifecycle = f" {issue.lifecycle.value}" if issue.lifecycle else ""
         evidence = f" ({len(issue.evidence)} observation{'s' if len(issue.evidence) != 1 else ''})"
-        lines.append(
-            f"[{issue.severity}]{lifecycle} {issue.kind} {issue.object_type}|{issue.object_name}{evidence}"
-        )
+        lines.append(f"[{issue.severity}]{lifecycle} {issue.kind} {issue.object_type}|{issue.object_name}{evidence}")
         if len(issue.variants) > 1:
             for variant in issue.variants:
                 rendered = json.dumps(variant.value, ensure_ascii=False, sort_keys=True, default=str)
@@ -123,7 +121,10 @@ def _collection_problem_lines(inventories: list[Inventory] | None) -> list[str]:
 def _finding_lines(findings: list[Finding]) -> list[str]:
     return [
         "",
-        *(f"[{finding.severity}] {finding.kind} {finding.object_type}|{finding.object_name}: {finding.message}" for finding in findings),
+        *(
+            f"[{finding.severity}] {finding.kind} {finding.object_type}|{finding.object_name}: {finding.message}"
+            for finding in findings
+        ),
     ]
 
 
@@ -224,9 +225,7 @@ def render_html(
     rows = []
     if issue_items:
         for issue in issue_items:
-            variants = "; ".join(
-                f"{','.join(variant.targets)}={variant.value!r}" for variant in issue.variants
-            )
+            variants = "; ".join(f"{','.join(variant.targets)}={variant.value!r}" for variant in issue.variants)
             impact = str((issue.impact or {}).get("blast_radius", 0))
             cells = [
                 issue.severity,
@@ -289,9 +288,7 @@ th{background:#f4f4f4}
         print(document, end="")
 
 
-def render_sarif(
-    findings: list[Finding], output: str | None, *, issues: Iterable[Issue] | None = None
-) -> None:
+def render_sarif(findings: list[Finding], output: str | None, *, issues: Iterable[Issue] | None = None) -> None:
     rules: dict[str, dict[str, Any]] = {}
     results: list[dict[str, Any]] = []
     level_map = {"info": "note", "warning": "warning", "breaking": "error", "critical": "error"}

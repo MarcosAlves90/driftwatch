@@ -35,10 +35,7 @@ class PolicyRule:
             fnmatch.fnmatchcase(finding.object_name, self.pattern)
             and (not self.kinds or finding.kind in self.kinds)
             and (not self.object_types or finding.object_type in self.object_types)
-            and (
-                not self.targets
-                or bool(set(self.targets).intersection(finding.comparison or finding.targets))
-            )
+            and (not self.targets or bool(set(self.targets).intersection(finding.comparison or finding.targets)))
         )
 
 
