@@ -295,11 +295,11 @@ def plan_for_finding(
     except ValueError:
         return _manual("The finding does not identify a remediable SQL Server object.")
     comparison = finding.comparison
+    desired = desired_target
     if comparison:
-        desired = desired_target or comparison[0]
+        desired = desired or comparison[0]
         actual_target = next((target for target in comparison if target != desired), comparison[-1])
     else:
-        desired = desired_target
         actual_target = None
     desired_state = _object_state(inventories, desired, str(identifier)) if desired else None
     precondition = (

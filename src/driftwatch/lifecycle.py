@@ -31,6 +31,7 @@ def _classify_current(
     item: Finding, previous_by_issue: dict[str, list[dict[str, Any]]], previous: Any, now: str
 ) -> Finding:
     prior = previous_by_issue.get(item.issue_key, [])
+    first_seen: str | None
     if not prior:
         lifecycle = FindingLifecycle.NEW
         first_seen = now
